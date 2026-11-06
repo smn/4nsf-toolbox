@@ -5,6 +5,10 @@ Welcome to the Toolbox for the Garmin 4NSF, also known as Navigon 70/71 and VW/S
 
 This repository is there to add some extra flair to your GarminNavigon device, but it's essential to tread carefully. Messing around with the operating system or other files could potentially lead to unintentional mishaps, and nobody wants a bricked device. So, have fun exploring the enhanced features, but proceed with caution. Make sure you've backed up your device before diving into the exciting world of customization. If you're unsure about anything, feel free to reach out via the [Issues section](https://github.com/jilleb/4nsf-toolbox/issues). Happy tinkering, and may your device stay as lively as ever!
 
+## Emulator
+
+Want to try Windows CE apps without a device? The [Emulator](Emulator/README.md) folder boots a Windows Embedded Compact 7 ARM virtual machine in QEMU with the `Apps` folder attached as a disk. It also explains why the device's own firmware (ST Cartesio STA2064 SoC) cannot be booted in QEMU as-is.
+
 ## Apps
 
 Additional apps add new features to the device. The following apps are available in the repository.
