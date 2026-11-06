@@ -3,9 +3,12 @@
 # toolbox's Apps folder attached as a disk, so Windows CE ARM apps can be tried
 # without a Garmin 4NSF / Navigon 70 device. See Emulator/README.md.
 #
-# Usage: Emulator/run-emulator.sh [--headless] [--rebuild-disk] [extra qemu args]
+# Usage: Emulator/run-emulator.sh [--headless] [--rebuild-disk] [--navigon] [extra qemu args]
 #   --headless       no window; VNC on 127.0.0.1:5901, QEMU monitor on work/mon.sock
 #   --rebuild-disk   recreate work/disk.img from ../Apps even if it exists
+#   --navigon        boot the patched image with work/navigon-disk.img, the full
+#                    VW/Navigon flash tree built by build-navigon.sh
+#   --image FILE / --disk FILE   use another flat kernel image / disk image
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,14 +21,18 @@ LOAD_ADDR=0x80000000
 ENTRY_ADDR=0x800010c0
 DISK_MB="${DISK_MB:-256}"
 
-headless=0 rebuild=0
+headless=0 rebuild=0 image="" disk=""
 extra=()
-for a in "$@"; do
-  case "$a" in
+while [ $# -gt 0 ]; do
+  case "$1" in
     --headless) headless=1 ;;
     --rebuild-disk) rebuild=1 ;;
-    *) extra+=("$a") ;;
+    --navigon) image="$WORK/NK.flashdisk.raw"; disk="$WORK/navigon-disk.img" ;;
+    --image) image="$2"; shift ;;
+    --disk) disk="$2"; shift ;;
+    *) extra+=("$1") ;;
   esac
+  shift
 done
 
 for tool in qemu-system-arm curl unzip mkfs.vfat mcopy python3 sha256sum; do
@@ -43,10 +50,15 @@ if [ ! -f "$IMAGE_RAW" ] || ! echo "$IMAGE_RAW_SHA256  $IMAGE_RAW" | sha256sum -
   echo "$IMAGE_RAW_SHA256  $IMAGE_RAW" | sha256sum -c -
 fi
 
-if [ "$rebuild" = 1 ] || [ ! -f disk.img ]; then
+if [ -z "$disk" ] && { [ "$rebuild" = 1 ] || [ ! -f disk.img ]; }; then
   echo ">> building disk.img (${DISK_MB} MB FAT32) with the Apps folder"
   python3 "$HERE/mkdisk.py" disk.img "$DISK_MB" "$HERE/../Apps"
 fi
+image="${image:-$IMAGE_RAW}"
+disk="${disk:-disk.img}"
+for f in "$image" "$disk"; do
+  [ -f "$f" ] || { echo "missing $f (for --navigon run build-navigon.sh first)" >&2; exit 1; }
+done
 
 display=(-display gtk)
 if [ "$headless" = 1 ]; then
@@ -57,10 +69,10 @@ fi
 exec qemu-system-arm \
   -global virtio-mmio.force-legacy=false \
   -machine type=vexpress-a15 -m 256 \
-  -device "loader,addr=$LOAD_ADDR,file=$IMAGE_RAW" \
+  -device "loader,addr=$LOAD_ADDR,file=$image" \
   -device "loader,addr=$ENTRY_ADDR,cpu-num=0" \
   -device virtio-tablet-device \
-  -blockdev driver=file,filename=disk.img,node-name=d0 -device virtio-blk-device,drive=d0 \
+  -blockdev "driver=file,filename=$disk,node-name=d0" -device virtio-blk-device,drive=d0 \
   -serial "file:$WORK/serial.log" \
   -audio none \
   "${display[@]}" "${extra[@]}"

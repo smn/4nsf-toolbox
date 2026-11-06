@@ -1,8 +1,10 @@
 # Emulating the 4NSF (Windows CE) in QEMU
 
-This folder lets you boot a Windows Embedded Compact 7 ARM virtual machine in
-QEMU with the toolbox's `Apps` folder attached as a disk, so you can try
-Windows CE ARM apps and custom app packages without touching a real device.
+This folder boots a Windows Embedded Compact 7 ARM virtual machine in QEMU
+and can load the complete VW "maps + more" software (Navigon 7.16.9, OS
+2.33) into it from Volkswagen's own update package. Nothing from the device
+or the package is committed to git; the scripts rebuild everything into
+`Emulator/work/`.
 
 ![Total Commander/CE from this repo running inside QEMU](screenshot-totalcommander-in-qemu.png)
 
@@ -10,87 +12,127 @@ Windows CE ARM apps and custom app packages without touching a real device.
 
 | Item | Value |
 |---|---|
-| Device | Garmin 4NSF / Navigon 70 series / VW, Seat, Skoda PID |
+| Device | Garmin 4NSF / Navigon 70 series / VW, Seat, Skoda PID ("maps + more") |
 | SoC | STMicroelectronics Cartesio+ STA2064 (ARM1176 core, integrated GPS) |
 | RAM / flash | 128 MB / 4 GB |
-| OS | Windows CE 6.0 |
-| App binaries in this repo | PE32 for Windows CE, ARM Thumb, subsystem 9, OS version 6.0 |
+| OS | Windows CE 6.0, OS image version 2.33, Navigon MobileNavigator 7.16.9 build 314 |
+| App binaries | PE32 for Windows CE, ARM Thumb, subsystem 9 |
 
-The SoC matters: QEMU has no machine model for the STA2064, so the device's own
-OS image (`NK.bin` with the Cartesio board support package and its display,
-NAND, GPS, CAN and USB drivers) cannot be booted as-is. There is no
-"drop the firmware in and run it" option for this hardware, and the only
-existing WinCE-on-QEMU project targets a different (virtual) board.
+QEMU has no machine model for the STA2064, so the device's own `NK.nb0`
+(kernel plus Cartesio drivers for display, NAND, GPS, CAN, USB) cannot be
+booted as-is. The approach here is the other way round: run a generic
+Compact 7 image on QEMU's `vexpress-a15` board and move the device's
+user-mode software onto it.
 
-## What you can emulate today
-
-The [Milek7/wince-qemu](https://github.com/Milek7/wince-qemu) project is a
-Windows Embedded Compact 7 board support package for QEMU's `vexpress-a15`
-machine, with a prebuilt kernel image on its releases page. Compact 7 runs
-Windows CE 6.0 ARM user-mode applications, so it works as a test bench for:
-
-- Windows CE ARM apps such as the Total Commander/CE build in `Apps/TotalCommander` (verified, see screenshot).
-- Your own CE 6.0 apps or shortcuts before copying them to the device.
-- Inspecting Navigon app packages (`.nfs`, `.kbi`, `NgAppInfo.xml`) on a CE file system.
-
-What it does not give you:
-
-- The Navigon shell, its `AppCom` launcher, the `\My Flash Disk` layout or the
-  Navigon DLLs that live in the device's `\Windows`. `VwPaint.exe` starts
-  without a missing-DLL error but shows no window, because it expects to be
-  launched by the Navigon framework.
-- Device hardware: GPS, CAN/vehicle data, the 480x272 touch panel, real NAND.
-- Anything that lives in the device's `NK.bin` (drivers, registry, OEM shell).
-
-## Running it
+## Quick start
 
 Requirements (Debian/Ubuntu): `apt install qemu-system-arm curl unzip dosfstools mtools python3`.
-No root is needed; the disk image is built with mtools.
+No root is needed anywhere.
 
 ```sh
-Emulator/run-emulator.sh                 # opens a QEMU window (1024x600)
-Emulator/run-emulator.sh --headless      # no window: VNC on 127.0.0.1:5901
-Emulator/run-emulator.sh --rebuild-disk  # refresh work/disk.img from ../Apps
+Emulator/run-emulator.sh                 # generic CE 7 VM, Apps/ attached as a disk
+Emulator/run-emulator.sh --headless      # same, VNC on 127.0.0.1:5901
+
+Emulator/build-navigon.sh                # ~1 min after the 3.5 GB download
+Emulator/run-emulator.sh --navigon       # VM with the whole \My Flash Disk tree
 ```
 
-The script:
+`run-emulator.sh` downloads the prebuilt Compact 7 image from
+[Milek7/wince-qemu](https://github.com/Milek7/wince-qemu) (SHA-256 checked),
+builds a FAT32 disk and starts QEMU. The disk shows up in the guest as
+`\Mounted Volume` (generic mode) or `\My Flash Disk` (`--navigon`). Boot takes
+about a minute. Kernel debug output goes to `work/serial.log`; in headless
+mode a QEMU monitor socket is at `work/mon.sock`.
 
-1. Downloads the prebuilt image (about 11 MB) into `Emulator/work/` and checks its SHA-256.
-2. Builds `work/disk.img`, a 256 MB MBR + FAT32 image, and copies `Apps/` into it (`mkdisk.py`).
-3. Boots QEMU with the image loaded at `0x80000000` and the CPU started at `0x800010c0`.
-
-Boot takes about a minute. The disk shows up in the guest as `\Mounted Volume`.
-To start an app, use **Start > Run...** and type the quoted path, for example:
+To start a program in the guest use **Start > Run...** with a quoted path:
 
 ```
 "\Mounted Volume\Apps\TotalCommander\tc.exe"
+"\My Flash Disk\MortScript.exe" "\My Flash Disk\emu_start.mscr"
 ```
 
-Kernel debug output goes to `work/serial.log`. In headless mode a QEMU
-monitor socket is at `work/mon.sock` (`screendump file.ppm` takes a screenshot).
+## Where the Navigon software comes from
 
-To put other files into the guest, add them to the `Apps` folder and run with
-`--rebuild-disk`, or pass extra files to `mkdisk.py` directly:
+Volkswagen still hosts the Garmin-labelled PID update at
+`https://navigation-maps.volkswagen.com/vw-maps/Central_Europe.zip`
+(3.5 GB, May 2022; other regions come through the myVolkswagen portal with
+an Up! VIN). `build-navigon.sh` downloads it and verifies the package's own
+MD5 list. It contains:
 
-```sh
-python3 Emulator/mkdisk.py Emulator/work/disk.img 256 Apps path/to/my-app
-```
+| File | What it is |
+|---|---|
+| `Install_OS.exe` | ExtractorCE self-extractor with the OS: `NK.nb0` (25 MB Windows CE ROM), `ApLoader.bin`, `xL_CPlus.bin`, `Meminit.bin`, `LPHandle.bin`, boot `config.txt`, splash screens |
+| `UpdateMeContent.content` | Same container, 769 files: the `\My Flash Disk` tree (VwUserShell, VwBrandDevice, NAVIGON, BT, MediaPlayer, PictureViewer, Apps, watchdog configs, maps) |
+| `Install_BT.exe`, `FullInstaller.exe`, `autorunce.mscr` | Bluetooth firmware and the SD-card installer chain |
 
-## Getting closer to the real device
+The install guide says the package is only for units with the GARMIN label on
+the back. The emulator never flashes anything, it only unpacks files.
 
-If the goal is to run the device's own firmware, the options are, in order of effort:
+## Tools in this folder
 
-1. **Dump the device's `\Windows` folder** (Explorer app or Total Commander on
-   the device, copy to the SD card) and place the Navigon DLLs next to the apps
-   on the emulator disk, so more of the Navigon apps start. CE loads DLLs from
-   the executable's folder first.
-2. **Extract `NK.bin`** from a firmware dump with Windows CE tools (viewbin,
-   cvrtbin, dumprom) to get the OEM shell, registry and DLLs as files, then
-   try them on the Compact 7 image. Kernel-mode drivers will not run.
-3. **Write a QEMU board model for the STA2064.** This is a large project: the
-   Cartesio user manual is public, but the display controller, interrupt
-   controller, timers, NAND and USB would all need to be modelled before the
-   stock `NK.bin` gets past the OEM Abstraction Layer. Nobody has done this.
+| Script | Purpose |
+|---|---|
+| `sfx_extract.py` | Unpacks the ExtractorCE `!NAVIGON_SFX!` archives (format documented in the file) with per-file MD5 check |
+| `ceromdump.py` | Dumps a Windows CE ROM image: rebuilds every XIP module as a loadable PE file, copies the ROM files, flags compressed ones |
+| `celzx.py` | Decompresses ROM-compressed files (24-bit block table, 4 KB LZX blocks); verified byte-exact against a copy of the same DLL on the flash disk |
+| `patch_image.py` | Renames the Compact 7 image's disk mount from `Mounted Volume` to `My Flash Disk` |
+| `cestub.py` | `make-stub` builds an ARM CE DLL of stub exports with chosen return values without a toolchain; `patch` rewrites a PE's import table so symbols the target image lacks come from the stub |
+| `mkdisk.py` | MBR + FAT32 disk image from folders, using mtools |
+| `emu_start.mscr` | MortScript for the guest: registry setup from the device's `autorunce.mscr`, then the application chain from `Watchdog_HW.ini`. MortScript itself runs in the VM, but this script has not yet been seen to start the chain; the three Run commands below are the verified route |
 
-Microsoft's own Device Emulator (ARMv4i) is another option on a Windows host,
-but it also only runs images built for its virtual board, not the device image.
+`cestub.py patch` found only 16 coredll functions (RAS and TAPI used by
+`BTCore.exe` and `navigon.exe`, `GetSystemPowerStatusEx` used by every
+hardware-layer DLL) and one DLL (`svoxdll.dll`) that the Compact 7 image lacks.
+The device ROM's own DLLs that the apps load at run time (`WolfSpecial.dll`,
+`nfVR.dll`, `openGL_ES_STA2065.dll`, MFC 9.0, fonts) are copied next to each
+executable.
+
+## How far it runs
+
+Verified in this repository's history, screenshots in this folder:
+
+- Generic mode: Windows CE desktop, disk mounts, Total Commander/CE from `Apps` runs.
+- Navigon mode: the disk mounts as `\My Flash Disk`
+  (`screenshot-my-flash-disk.png`). Started one after the other from
+  **Start > Run...**:
+
+  ```
+  "\My Flash Disk\VwUserShell\VwCommunicationExe.exe"
+  "\My Flash Disk\VwBrandDevice\VwBrandDevice.exe"
+  "\My Flash Disk\VwUserShell\VwUserShell.exe" -ShowWindow=1
+  ```
+
+  all three start and keep running, appear in the taskbar, and load
+  `WolfSpecial.dll` and the hardware layer. MortScript runs in the guest too.
+- Not yet: the VW shell never paints its window. The serial log shows the
+  hardware layer failing on the OEM stream drivers it opens through
+  `WolfSpecial.dll`: `GMD1:` (GarminDrv), `HFC1:` (hidden flash, where the
+  device ID, VIN and brand live), `WDT1:` (watchdog), `BKL1:` (backlight). The
+  shell loops on `CHWLWolf::ReadFlash` and does not get to its UI. A
+  `WolfSpecial.dll` built with `cestub.py make-stub ... ReadHiddenFlash=1 ...`
+  (every function reporting success) is not enough on its own.
+
+## Next steps for a working UI
+
+1. **Hidden flash contents.** Dump the real unit's hidden flash through the
+   device's `WolfSpecial.dll` `ReadHiddenFlash` (or Total Commander on the
+   device reading `HFC1:`) and serve it from a stub `HFC1:` stream driver or a
+   stub `WolfSpecial.dll` that copies it into the caller's buffer. This is the
+   device-specific data the apps key on (brand, VIN pairing, serial).
+2. **Stub drivers.** `GMD1:`, `WDT1:` and `BKL1:` only need Init/Open/IOControl
+   entry points that return success; `cestub.py make-stub` can build the DLL,
+   the registry entries under `HKLM\Drivers\BuiltIn` can be set from
+   `emu_start.mscr`, and `ActivateDevice` loads them.
+3. **Display.** The apps draw with plain GDI (`CreateDIBSection` + `BitBlt`)
+   into skins named `R480x272`, so the 1024x600 PL111 is fine once they get
+   past the hardware checks. `ChangeDisplaySettingsEx` is called and will fail
+   harmlessly.
+4. **GPS.** The Compact 7 image maps QEMU's second UART to `COM1:`; feed NMEA
+   from `gpsfake` through `-serial` once `navigon.exe` is up.
+5. **Map licence.** Navigon maps are keyed to the device serial from the OEM
+   layer; expect a licence error until the serial is served by step 1.
+
+## Files that stay out of git
+
+`Emulator/work/` is ignored. It holds the Compact 7 image, the VW package,
+its unpacked trees, the ROM dump and the disk images (about 20 GB in total).

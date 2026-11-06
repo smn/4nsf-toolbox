@@ -1,0 +1,22 @@
+# Start the VW "maps + more" software inside the QEMU Compact 7 image.
+# In the guest: Start > Run...
+#   "\My Flash Disk\MortScript.exe" "\My Flash Disk\emu_start.mscr"
+# This mirrors what the device's autorunce.mscr and Watchdog_HW.ini do.
+ErrorLevel ( "syntax" )
+
+# fonts from the device ROM (dumped to \rom\files)
+RegWriteString("HKLM", "System\GDI", "FontPath", "\My Flash Disk\rom\files")
+RegWriteDWord("HKLM", "SYSTEM\GDI", "FontLinkMethods", 3)
+
+# crash reporter, as on the device
+RegWriteDWord("HKLM", "Debug", "Debugger_Enable", 1)
+RegWriteString("HKLM", "Debug", "JITDebugger", "\My Flash Disk\ErrorReporter.exe")
+
+# application chain in Watchdog_HW.ini order
+Run("\My Flash Disk\VwUserShell\VwCommunicationExe.exe")
+Sleep(3000)
+Run("\My Flash Disk\VwBrandDevice\VwBrandDevice.exe")
+Sleep(5000)
+Run("\My Flash Disk\VwUserShell\VwUserShell.exe", "-ShowWindow=1")
+Sleep(5000)
+Run("\My Flash Disk\NAVIGON\navigon.exe")
