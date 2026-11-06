@@ -60,7 +60,7 @@ if [ ! -f "$IMAGE_RAW" ]; then
   exit 1
 fi
 [ -d "$WORK/rom_vexpress/modules" ] || python3 -I "$HERE/ceromdump.py" "$IMAGE_RAW" "$WORK/rom_vexpress" | tail -1
-[ -f "$WORK/NK.flashdisk.raw" ] || python3 -I "$HERE/patch_image.py" "$IMAGE_RAW" "$WORK/NK.flashdisk.raw"
+[ -f "$WORK/NK.flashdisk.raw" ] || python3 -I "$HERE/patch_image.py" --display 480x272 "$IMAGE_RAW" "$WORK/NK.flashdisk.raw"
 
 echo ">> 6. import shims"
 if [ ! -f "$NAV/flash_shim/.done" ]; then
@@ -83,6 +83,65 @@ if [ ! -f "$NAV/flash_shim/.done" ]; then
   touch "$NAV/flash_shim/.done"
 fi
 
+echo ">> 6b. emulated hidden flash (WolfSpecial.dll replacement)"
+# The real WolfSpecial.dll talks to the HFC1:/GMD1:/WDT1:/BKL1: drivers of the
+# Cartesio board. This stub serves a 2 KB hidden-flash image from a file
+# instead. Drop a dump of your own unit's hidden flash in work/hidden_flash.bin
+# to get its brand / VIN pairing / serial; set WOLF_STUB=0 to keep the real DLL.
+if [ "${WOLF_STUB:-1}" = 1 ]; then
+  [ -f "$WORK/hidden_flash.bin" ] || head -c 2048 /dev/zero > "$WORK/hidden_flash.bin"
+  mkdir -p "$NAV/wolfstub"
+  (cd "$WORK" && python3 -I "$HERE/cestub.py" make-stub "$NAV/wolfstub/WolfSpecial.dll" \
+    ReadHiddenFlash=blob:hidden_flash.bin WriteHiddenFlash=blobw:hidden_flash.bin \
+    GetDeviceID=str:EMU0000001 GetHWVersion=str:1.0 GetBTVersion=str:1.0 GetOSVersion=str:2.33 \
+    GetBootLoaderVersion=str:1.0 ReadBTAddressFromHF=str:00:11:22:33:44:55 \
+    BackToFactorySettings=1 GetDeviceBrightness=1 GetDisplayState=1 GetExternalAudioMutePin=1 \
+    GetGPRSModemPowerState=1 GetHWWatchdogState=1 GetHWWatchdogTimeout=1 GetPowerSource=1 \
+    GetSpeakerMode=1 Gpio_control=1 IsCradleStatusConnected=1 RefreshHWWatchdog=1 ResetBTChip=1 \
+    ResetGPRSModemState=1 SetDeviceBrightness=1 SetDisplayState=1 SetExternalAudioMutePin=1 \
+    SetGPRSModemPowerState=1 SetHWWatchdogState=1 SetHWWatchdogTimeout=1 SetLoaderTextColor=1 \
+    SetNoSWFoundImagePath=1 SetSpeakerMode=1 SetSplashImagePath=1 SetTCPWindowSize=1 \
+    SetUSBModeImagePath=1 TouchCalibration=1 WriteBTAddressToHF=1)
+  for d in $(find "$NAV/flash_shim" -iname '*.exe' -printf '%h\n' | sort -u); do
+    cp "$NAV/wolfstub/WolfSpecial.dll" "$d/"
+  done
+fi
+
+echo ">> 6b2. optional: replace the whole hardware layer (HWL_STUB=1)"
+# With HWL_STUB=1 HWLHardwareLayer.dll itself is replaced by a stub that
+# answers every call with success / canned values (device not docked). Used
+# to prove the hardware layer is not what keeps the VW shell from drawing.
+if [ "${HWL_STUB:-0}" = 1 ]; then
+  python3 -I "$HERE/cestub.py" make-stub "$NAV/wolfstub/HWLHardwareLayer.dll" $(sed -n '/^HWL_STUB_EXPORTS=/,/^HWL_STUB_END/p' "$HERE/build-navigon.sh" | sed '1d;$d')
+  for d in $(find "$NAV/flash_shim" -iname '*.exe' -printf '%h\n' | sort -u); do
+    [ -f "$d/HWLHardwareLayer.dll" ] && cp "$NAV/wolfstub/HWLHardwareLayer.dll" "$d/"
+  done
+fi
+
+echo ">> 6c. emulator extras on the disk"
+# Shortcuts (CE .lnk = "<len>#<command line>") in a folder that sorts first,
+# so everything can be started with the mouse; an empty BrandDevice.reg
+# resets the car pairing; the DevMode file is the well-known way to feed a
+# VIN without a car (edit the placeholder).
+mkdir -p "$NAV/flash_shim/0emu" "$NAV/flash_shim/VwBrandDevice/Settings"
+mklnk() { local c="$2"; printf '%d#%s' "${#c}" "$c" > "$NAV/flash_shim/0emu/$1.lnk"; }
+mklnk "1 com"      '"\My Flash Disk\VwUserShell\VwCommunicationExe.exe"'
+mklnk "2 brand"    '"\My Flash Disk\VwBrandDevice\VwBrandDevice.exe"'
+mklnk "3 shell"    '"\My Flash Disk\VwUserShell\VwUserShell.exe" -ShowWindow=1'
+mklnk "4 navigon"  '"\My Flash Disk\NAVIGON\navigon.exe"'
+mklnk "5 script"   '"\My Flash Disk\MortScript.exe" "\My Flash Disk\emu_start.mscr"'
+mklnk "6 tc"       '"\My Flash Disk\Apps\TotalCommander\tc.exe"'
+mklnk "7 watchdog" '"\My Flash Disk\WatchdogPuppy.exe" Watchdog_HW.ini'
+cp "$HERE"/guest-tools/bin/*.exe "$NAV/flash_shim/0emu/"
+: > "$NAV/flash_shim/BrandDevice.reg"
+[ -f "$NAV/flash_shim/VwBrandDevice/Settings/UserSettingsDevMode.default" ] || cat > "$NAV/flash_shim/VwBrandDevice/Settings/UserSettingsDevMode.default" <<'XML'
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<Settings>
+	<Active>1</Active>
+	<VehicleIdentificationNumber>WVWZZZAAZFD000000</VehicleIdentificationNumber>
+</Settings>
+XML
+
 echo ">> 7. disk image"
 if [ ! -f "$WORK/navigon-disk.img" ]; then
   rm -rf "$NAV/stage"; mkdir -p "$NAV/stage"
@@ -94,3 +153,30 @@ if [ ! -f "$WORK/navigon-disk.img" ]; then
 fi
 
 echo "done. Boot with: $HERE/run-emulator.sh --navigon"
+
+exit 0
+# Export list for HWL_STUB=1 (read by the sed above; keep the markers).
+HWL_STUB_EXPORTS=
+'?Connect@HardwareLayer@@YAXPAVIHWLPowerButtonListener@1@@Z' '?Disconnect@HardwareLayer@@YAXPAVIHWLPowerButtonListener@1@@Z'
+'?Connect@HardwareLayer@@YAXPAVIHWLCardListener@1@@Z' '?Disconnect@HardwareLayer@@YAXPAVIHWLCardListener@1@@Z'
+'?Connect@HardwareLayer@@YAXPAVIHWLCradleListener@1@@Z' '?Disconnect@HardwareLayer@@YAXPAVIHWLCradleListener@1@@Z'
+'?Connect@HardwareLayer@@YAXPAVIHWLUSBListener@1@@Z' '?Disconnect@HardwareLayer@@YAXPAVIHWLUSBListener@1@@Z'
+'?Connect@HardwareLayer@@YAXPAVIHWLPowerListener@1@@Z' '?Disconnect@HardwareLayer@@YAXPAVIHWLPowerListener@1@@Z'
+'?Connect@HardwareLayer@@YAXPAVIHWLSuspendResumeDeviceListener@1@@Z' '?Disconnect@HardwareLayer@@YAXPAVIHWLSuspendResumeDeviceListener@1@@Z'
+'?Connect@HardwareLayer@@YAXPAVIHWLProximityListener@1@@Z' '?Disconnect@HardwareLayer@@YAXPAVIHWLProximityListener@1@@Z'
+'?GetBrightness@HardwareLayer@@YA_NAAE@Z=1' '?SetBrightness@HardwareLayer@@YA_NABM@Z=1' '?GetPowerInfo@HardwareLayer@@YA_NAAUCHWLPowerInfo@1@@Z=1'
+'?GetDriveFromPath@HardwareLayer@@YA_NPB_WPA_WK@Z=0' '?ShutdownDevice@HardwareLayer@@YA_NXZ=1' '?ResetDevice@HardwareLayer@@YA_NXZ=1' '?SuspendDevice@HardwareLayer@@YA_NXZ=1'
+'?GetDeviceID@HardwareLayer@@YA_NPA_WI@Z=wstr:EMU0000001' '?GetBtMACAddr@HardwareLayer@@YA_NPA_WH@Z=wstr:00:11:22:33:44:55'
+'?CalibrateTouchscreen@HardwareLayer@@YA_NXZ=1' '?EnableAutoSwitchOn@HardwareLayer@@YA_NAB_N@Z=1' '?IsNavigonChargerConnected@HardwareLayer@@YA_NXZ=1'
+'?ReadFlash@HardwareLayer@@YA_NKPAEK@Z=blob_obl:hidden_flash.bin' '?WriteFlash@HardwareLayer@@YA_NKPBEK@Z=1'
+'?ActivateMic@HardwareLayer@@YA_NAB_N@Z=1' '?SetMicVolume@HardwareLayer@@YA_NABI@Z=1' '?GetMicVolume@HardwareLayer@@YA_NAAI@Z=1'
+'?SetMuteDeviceSpeakers@HardwareLayer@@YA_NAB_N@Z=1' '?GetMuteDeviceSpeakers@HardwareLayer@@YA_NAA_N@Z=1'
+'?SetCradleDetectAutomaticSwitchOffInternalSpeakers@HardwareLayer@@YA_NAB_N@Z=1' '?GetCradleDetectAutomaticSwitchOffInternalSpeakers@HardwareLayer@@YA_NAA_N@Z=1'
+'?IsCradleStatusConnected@HardwareLayer@@YA_NXZ=0' '?ChangeStartupScreen@HardwareLayer@@YA_NPB_W@Z=1'
+'?DismountPartition@HardwareLayer@@YA_NPB_W0@Z=1' '?MountPartition@HardwareLayer@@YA_NPB_W0@Z=1' '?GetCeVersion@HardwareLayer@@YA_NPA_W@Z=wstr:7.0'
+'?GetBTVersion@HardwareLayer@@YA_NAAV?$StringProxy@VNgStringImpl@String@@@String@@@Z=0'
+'?GetHWVersion@HardwareLayer@@YA_NKAAV?$StringProxy@VNgStringImpl@String@@@String@@@Z=0'
+'?SetProximitySensorState@HardwareLayer@@YA_NAB_N@Z=1' '?SetProximitySensorSensitivity@HardwareLayer@@YA_NABH0@Z=1'
+'?SetProximitySensorRate@HardwareLayer@@YA_NABI@Z=1' '?SetProximitySensorCombo@HardwareLayer@@YA_NABI@Z=1'
+'?GetStorageCardId@HardwareLayer@@YA_NPB_WPA_WABI@Z=0' '?IsUSBPowerConnected@HardwareLayer@@YA_NXZ=0' '?ResetToFactorySettings@HardwareLayer@@YA_NXZ=1'
+HWL_STUB_END

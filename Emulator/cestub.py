@@ -3,10 +3,15 @@
 
 Two sub-commands:
 
-  cestub.py make-stub OUT.dll NAME[=VALUE] [NAME[=VALUE] ...]
-      Build a tiny ARM Windows CE DLL that exports each NAME as a function
-      returning VALUE (default 0, i.e. FALSE / NULL). No toolchain needed.
-      Also handy for replacing a whole OEM library (e.g. WolfSpecial.dll).
+  cestub.py make-stub OUT.dll NAME[=SPEC] [NAME[=SPEC] ...]
+      Build a tiny ARM Windows CE DLL exporting each NAME. SPEC is a return
+      value (default 0), "str:TEXT" / "wstr:TEXT" (copies TEXT as ANSI /
+      UTF-16 into the buffer argument and returns 1), "blob:FILE" (for
+      (buf, len, offset): copies FILE[offset:] into buf, returns len),
+      "blob_obl:FILE" (same for (offset, buf, len), returns 1) or
+      "blobw:FILE" (writes buf into the blob).
+      No toolchain needed. Used to replace WolfSpecial.dll with an emulated
+      hidden flash.
 
   cestub.py patch [--names DEVICE_MODULES_DIR] [--stub-dlls a.dll,b.dll] \
                   IMAGE_MODULES_DIR STUB.dll FILE [FILE ...]
@@ -20,6 +25,9 @@ Two sub-commands:
       Prints the list of shimmed symbols so the stub can be regenerated with
       "make-stub" if it lacks any. DLLs that are neither in the image nor in
       --stub-dlls are left alone (they are expected next to the executable).
+      --rename rewrites an import DLL name in place (same length or shorter),
+      e.g. to load the device ROM's mmtimer.dll as mmtime6.dll instead of the
+      image's own copy, which ROM modules otherwise always win over.
 
 The stub functions return 0, which for the functions seen so far
 (GetSystemPowerStatusEx, RasDial, lineInitialize, ...) means "failed /
@@ -40,20 +48,75 @@ def align(v, a):
 
 # ---------------------------------------------------------------- make-stub
 
+# ARM templates (assembled once with keystone, kept as words so no toolchain
+# is needed). Each starts with: ldr r3,[pc,#4]; add r3,pc,r3; b skip; .word
+# delta  -> r3 = address of a blob placed later in the same section.
+BLOB_READ = [0xE59F3004, 0xE08F3003, 0xEA000000, 0,          # r0=buf r1=len r2=off
+             0xE0833002, 0xE1A0C001, 0xE35C0000, 0x0A000003,  # r3+=off; ip=len; loop
+             0xE4D32001, 0xE4C02001, 0xE24CC001, 0xEAFFFFF9,  # ldrb/strb blob->buf
+             0xE1A00001, 0xE12FFF1E]                          # return len
+BLOB_WRITE = [0xE59F3004, 0xE08F3003, 0xEA000000, 0,
+              0xE0833002, 0xE1A0C001, 0xE35C0000, 0x0A000003,
+              0xE4D02001, 0xE4C32001, 0xE24CC001, 0xEAFFFFF9,  # ldrb/strb buf->blob
+              0xE1A00001, 0xE12FFF1E]
+STR_COPY = [0xE59F3004, 0xE08F3003, 0xEA000000, 0,            # r0=buf
+            0xE4D32001, 0xE4C02001, 0xE3520000, 0x1AFFFFFB,   # copy until NUL
+            0xE3A00001, 0xE12FFF1E]                           # return 1
+BLOB_READ_OBL = [0xE59F3004, 0xE08F3003, 0xEA000000, 0,        # r0=off r1=buf r2=len
+                 0xE0833000, 0xE1A00001, 0xE1A0C002, 0xE35C0000, 0x0A000003,
+                 0xE4D31001, 0xE4C01001, 0xE24CC001, 0xEAFFFFF9,
+                 0xE3A00001, 0xE12FFF1E]                         # return TRUE
+WSTR_COPY = [0xE59F3004, 0xE08F3003, 0xEA000000, 0,              # r0=wide buf
+             0xE0D320B2, 0xE0C020B2, 0xE3520000, 0x1AFFFFFB,
+             0xE3A00001, 0xE12FFF1E]
+DELTA_INDEX = 3  # the .word; add r3,pc,r3 sits at word 1, so pc there = off+12
+
+
 def make_stub(out, names, base=0x10000):
-    # NAME or NAME=VALUE (0..255): the value the stub returns in r0
-    rets = {}
+    """names: NAME, NAME=VALUE (return r0=VALUE), NAME=str:TEXT (copy TEXT+NUL
+    to the buffer in r0, return 1), NAME=blob:FILE (copy FILE[off:off+len] to
+    buf for (buf, len, off), return len), NAME=blobw:FILE (the reverse: write
+    into the blob, which is shared with blob:FILE of the same name)."""
+    specs = {}
     for n in names:
         name, _, val = n.partition("=")
-        rets[name] = int(val, 0) if val else 0
-    names = sorted(rets)
+        specs[name] = val
+    names = sorted(specs)
     file_align, sect_align = 0x200, 0x1000
-    # code: DllMain returns 1; each stub: mov r0,#VALUE ; bx lr  (ARM mode)
-    code = struct.pack("<II", 0xE3A00001, 0xE12FFF1E)  # entry
+    code = bytearray(struct.pack("<II", 0xE3A00001, 0xE12FFF1E))  # DllMain -> 1
     stub_rvas = []
+    fixups = []   # (word offset of delta, blob key)
+    blobs = {}    # key -> bytes
     for n in names:
+        v = specs[n]
         stub_rvas.append(len(code))
-        code += struct.pack("<II", 0xE3A00000 | (rets[n] & 0xFF), 0xE12FFF1E)
+        if v.startswith("str:") or v.startswith("wstr:"):
+            wide = v.startswith("wstr:")
+            text = v.split(":", 1)[1]
+            key = v
+            blobs[key] = text.encode("utf-16le") + b"\0\0" if wide else text.encode() + b"\0"
+            fixups.append((len(code) + 4 * DELTA_INDEX, key))
+            code += b"".join(struct.pack("<I", w) for w in (WSTR_COPY if wide else STR_COPY))
+        elif v.split(":")[0] in ("blob", "blobw", "blob_obl"):
+            kind, fn = v.split(":", 1)
+            key = "file:" + fn
+            if key not in blobs:
+                blobs[key] = open(fn, "rb").read()
+            fixups.append((len(code) + 4 * DELTA_INDEX, key))
+            tmpl = {"blob": BLOB_READ, "blobw": BLOB_WRITE, "blob_obl": BLOB_READ_OBL}[kind]
+            code += b"".join(struct.pack("<I", w) for w in tmpl)
+        else:
+            ret = int(v, 0) if v else 0
+            code += struct.pack("<II", 0xE3A00000 | (ret & 0xFF), 0xE12FFF1E)
+    blob_off = {}
+    for key, data in blobs.items():
+        while len(code) % 4:
+            code.append(0)
+        blob_off[key] = len(code)
+        code += data
+    for woff, key in fixups:
+        struct.pack_into("<i", code, woff, blob_off[key] - (woff - 4 * DELTA_INDEX + 12))
+    code = bytes(code)
     text_rva = 0x1000
     text_raw = align(len(code), file_align)
 
@@ -93,7 +156,7 @@ def make_stub(out, names, base=0x10000):
     dirs[0] = (edata_rva, len(edata))
     for rva, size in dirs:
         pe += struct.pack("<II", rva, size)
-    pe += b".text\0\0\0" + struct.pack("<IIIIIIHHI", len(code), text_rva, text_raw, hdr_size, 0, 0, 0, 0, 0x60000020)
+    pe += b".text\0\0\0" + struct.pack("<IIIIIIHHI", len(code), text_rva, text_raw, hdr_size, 0, 0, 0, 0, 0xE0000020)
     pe += b".edata\0\0" + struct.pack("<IIIIIIHHI", len(edata), edata_rva, edata_raw, hdr_size + text_raw, 0, 0, 0, 0, 0x40000040)
     pe += b"\0" * (hdr_size - len(pe))
     pe += code + b"\0" * (text_raw - len(code))
@@ -340,6 +403,27 @@ def patch_file(path, image_exports, stub_name, stub_dlls=(), ref_names=None):
 blob_fix = []
 
 
+def rename_imports(path, renames):
+    """Rewrite import DLL names in place (new name must not be longer)."""
+    pe = PE(path)
+    changed = []
+    for desc in pe.imports():
+        new = renames.get(desc["dll"].lower())
+        if not new:
+            continue
+        if len(new) > len(desc["dll"]):
+            raise ValueError(f"{new} longer than {desc['dll']}")
+        o = pe.r2o(desc["name_rva"])
+        pe.d[o:o + len(desc["dll"]) + 1] = new.encode() + b"\0" * (len(desc["dll"]) + 1 - len(new))
+        changed.append(f"{desc['dll']}->{new}")
+    if changed:
+        if not os.path.exists(path + ".orig"):
+            os.replace(path, path + ".orig")
+        with open(path, "wb") as f:
+            f.write(pe.d)
+        print(f"{path}: renamed imports {changed}")
+
+
 def main():
     if len(sys.argv) < 3:
         print(__doc__)
@@ -350,12 +434,16 @@ def main():
         return 0
     if cmd == "patch":
         argv = sys.argv[2:]
-        stub_dlls, ref_dir = set(), None
+        stub_dlls, ref_dir, renames = set(), None, {}
         while argv and argv[0].startswith("--"):
             if argv[0] == "--stub-dlls":
                 stub_dlls = set(x.lower() for x in argv[1].split(","))
             elif argv[0] == "--names":
                 ref_dir = argv[1]
+            elif argv[0] == "--rename":
+                for pair in argv[1].split(","):
+                    old, new = pair.split("=")
+                    renames[old.lower()] = new
             argv = argv[2:]
         moddir, stub, files = argv[0], argv[1], argv[2:]
         ref_names = {}
@@ -377,6 +465,8 @@ def main():
         allsyms = set()
         for f in files:
             blob_fix.clear()
+            if renames:
+                rename_imports(f, renames)
             try:
                 syms = patch_file(f, image_exports, stub_name, stub_dlls, ref_names)
             except Exception as ex:

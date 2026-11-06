@@ -75,8 +75,9 @@ the back. The emulator never flashes anything, it only unpacks files.
 | `sfx_extract.py` | Unpacks the ExtractorCE `!NAVIGON_SFX!` archives (format documented in the file) with per-file MD5 check |
 | `ceromdump.py` | Dumps a Windows CE ROM image: rebuilds every XIP module as a loadable PE file, copies the ROM files, flags compressed ones |
 | `celzx.py` | Decompresses ROM-compressed files (24-bit block table, 4 KB LZX blocks); verified byte-exact against a copy of the same DLL on the flash disk |
-| `patch_image.py` | Renames the Compact 7 image's disk mount from `Mounted Volume` to `My Flash Disk` |
-| `cestub.py` | `make-stub` builds an ARM CE DLL of stub exports with chosen return values without a toolchain; `patch` rewrites a PE's import table so symbols the target image lacks come from the stub |
+| `patch_image.py` | Renames the Compact 7 image's disk mount from `Mounted Volume` to `My Flash Disk`; `--display 480x272` rewrites the OAL's hardcoded 1024x600 mode and PL111 timings |
+| `cestub.py` | `make-stub` builds an ARM CE DLL without a toolchain: exports returning a value, copying a string, or serving a file-backed blob (used for `WolfSpecial.dll` with an emulated hidden flash and for a whole stub `HWLHardwareLayer.dll`); `patch` rewrites a PE's import table so symbols the target image lacks come from the stub, and can rename import DLLs |
+| `guest-tools/` | Hand-assembled CE test programs (sockets, timers, GDI, window list, thread stacks, app launchers) and their generators, copied to the disk's `0emu` folder |
 | `mkdisk.py` | MBR + FAT32 disk image from folders, using mtools |
 | `emu_start.mscr` | MortScript for the guest: registry setup from the device's `autorunce.mscr`, then the application chain from `Watchdog_HW.ini`. MortScript itself runs in the VM, but this script has not yet been seen to start the chain; the three Run commands below are the verified route |
 
@@ -92,45 +93,49 @@ executable.
 Verified in this repository's history, screenshots in this folder:
 
 - Generic mode: Windows CE desktop, disk mounts, Total Commander/CE from `Apps` runs.
-- Navigon mode: the disk mounts as `\My Flash Disk`
-  (`screenshot-my-flash-disk.png`). Started one after the other from
-  **Start > Run...**:
+- Navigon mode: the image is patched to the device's 480x272 screen
+  (`screenshot-480x272.png`) and the disk mounts as `\My Flash Disk`.
+  `VwCommunicationExe.exe`, `VwBrandDevice.exe` and `VwUserShell.exe
+  -ShowWindow=1` start, keep running, load every library, create their
+  full-screen windows and sit in their message loops. The `0emu` folder on
+  the disk holds shortcuts and test programs so all of this is mouse-driven.
+- Not yet: neither the brand app nor the shell ever draws. Their windows are
+  visible but never blitted into, so the Explorer underneath shows through
+  and swallows clicks.
 
-  ```
-  "\My Flash Disk\VwUserShell\VwCommunicationExe.exe"
-  "\My Flash Disk\VwBrandDevice\VwBrandDevice.exe"
-  "\My Flash Disk\VwUserShell\VwUserShell.exe" -ShowWindow=1
-  ```
+What has been ruled out, each with a test in `guest-tools/`:
 
-  all three start and keep running, appear in the taskbar, and load
-  `WolfSpecial.dll` and the hardware layer. MortScript runs in the guest too.
-- Not yet: the VW shell never paints its window. The serial log shows the
-  hardware layer failing on the OEM stream drivers it opens through
-  `WolfSpecial.dll`: `GMD1:` (GarminDrv), `HFC1:` (hidden flash, where the
-  device ID, VIN and brand live), `WDT1:` (watchdog), `BKL1:` (backlight). The
-  shell loops on `CHWLWolf::ReadFlash` and does not get to its UI. A
-  `WolfSpecial.dll` built with `cestub.py make-stub ... ReadHiddenFlash=1 ...`
-  (every function reporting success) is not enough on its own.
+| Suspect | Result |
+|---|---|
+| Hardware layer (`HWLHardwareLayer.dll`, `WolfSpecial.dll`, hidden flash, `GMD1:`/`HFC1:`/`WDT1:`/`BKL1:` drivers) | Replacing the whole hardware layer with a stub (`HWL_STUB=1`) changes nothing. `ReadHiddenFlash` is served from `work/hidden_flash.bin`. |
+| TCP/IP and the legacy `WINSOCK.dll` the apps use | `socktest.exe`: socket, bind, listen, connect, accept, send, recv on 127.0.0.1 all work. |
+| Multimedia timer | `timertest7.exe`: periodic callbacks fire. The shell's crash in `timeKillEvent` (null pointer in the image's mmtimer.dll) only happens on its way out. |
+| GDI | `gditest.exe`: a 16 bpp DIB section blits into a popup window exactly as the apps do. |
+| Screen size (`R480x272` skins) | Image patched to 480x272. Windows become 480x272, still nothing drawn. |
+| `\MN Settings`, `\Storage Card`, COM port, DevMode VIN, empty `BrandDevice.reg` | No change. |
+| Blocked threads | `stacks.exe`: main threads idle in `GetMessageW`, AppCom thread in `recvfrom`, a timer thread in mmtimer; nothing spins. The window procedure only calls `BeginPaint`/`EndPaint`; drawing happens from the apps' own engine, which never starts. |
+
+The device ROM's own modules cannot be transplanted: ROM modules are stored
+pre-relocated without fixups, so the CE 6 `mmtimer.dll` loaded at a new
+address corrupted its neighbour (`wspm.dll`) and crashed the shell.
 
 ## Next steps for a working UI
 
-1. **Hidden flash contents.** Dump the real unit's hidden flash through the
-   device's `WolfSpecial.dll` `ReadHiddenFlash` (or Total Commander on the
-   device reading `HFC1:`) and serve it from a stub `HFC1:` stream driver or a
-   stub `WolfSpecial.dll` that copies it into the caller's buffer. This is the
-   device-specific data the apps key on (brand, VIN pairing, serial).
-2. **Stub drivers.** `GMD1:`, `WDT1:` and `BKL1:` only need Init/Open/IOControl
-   entry points that return success; `cestub.py make-stub` can build the DLL,
-   the registry entries under `HKLM\Drivers\BuiltIn` can be set from
-   `emu_start.mscr`, and `ActivateDevice` loads them.
-3. **Display.** The apps draw with plain GDI (`CreateDIBSection` + `BitBlt`)
-   into skins named `R480x272`, so the 1024x600 PL111 is fine once they get
-   past the hardware checks. `ChangeDisplaySettingsEx` is called and will fail
-   harmlessly.
-4. **GPS.** The Compact 7 image maps QEMU's second UART to `COM1:`; feed NMEA
-   from `gpsfake` through `-serial` once `navigon.exe` is up.
-5. **Map licence.** Navigon maps are keyed to the device serial from the OEM
-   layer; expect a licence error until the serial is served by step 1.
+1. **AppCom.** The apps talk to each other with Navigon's AppCom (UDP on
+   127.0.0.1, ports in `NgAppCom.xml`). The brand app most likely waits for
+   vehicle data from `VwCommunicationExe`, which waits for the car's BAP
+   protocol on COM1 (`VwCommunicationManager.ini`, `ComPort=1` in the shim
+   copy). Feeding a BAP "no vehicle"/ignition sequence into QEMU's second
+   serial port, or sniffing AppCom with a small UDP tool on the disk, is the
+   most promising lead. AppCom has a logging switch (`AppComLogging`,
+   `AppComLogfilePath` strings in `ACAppCom.dll`) that this session could not
+   trigger from `NgAppCom.xml`.
+2. **Hidden flash contents.** Dump the real unit's 2 KB hidden flash (through
+   `WolfSpecial.dll` `ReadHiddenFlash` on the device) into
+   `work/hidden_flash.bin` so brand, VIN pairing and serial are genuine.
+3. **GPS.** Once `navigon.exe` runs, feed NMEA from `gpsfake` into QEMU's
+   `-serial` for `COM1:`.
+4. **Map licence.** Maps are keyed to the device serial from the OEM layer.
 
 ## Files that stay out of git
 
