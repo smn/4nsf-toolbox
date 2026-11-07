@@ -5,6 +5,20 @@ Welcome to the Toolbox for the Garmin 4NSF, also known as Navigon 70/71 and VW/S
 
 This repository is there to add some extra flair to your GarminNavigon device, but it's essential to tread carefully. Messing around with the operating system or other files could potentially lead to unintentional mishaps, and nobody wants a bricked device. So, have fun exploring the enhanced features, but proceed with caution. Make sure you've backed up your device before diving into the exciting world of customization. If you're unsure about anything, feel free to reach out via the [Issues section](https://github.com/jilleb/4nsf-toolbox/issues). Happy tinkering, and may your device stay as lively as ever!
 
+## Emulator
+
+Want to try the device's software, or your own, without a device? The [Emulator](Emulator/README.md) folder boots a Windows Embedded Compact ARM virtual machine in QEMU and can load the complete VW "maps + more" software into it from Volkswagen's own update package: the VW shell, Navigon MobileNavigator with a working map and an emulated GPS receiver, and the phone app. Nothing from the device or the package is committed; the scripts rebuild everything.
+
+![Navigon running in QEMU](Emulator/screenshot-navigon-map.png)
+
+```sh
+Emulator/run-emulator.sh            # generic CE VM with the Apps folder attached
+Emulator/build-navigon.sh           # one-time: download the VW package, build the disk
+Emulator/run-emulator.sh --navigon  # the full VW environment
+```
+
+The folder also documents what was needed to get there (hidden-flash pairing, loader and timer quirks, the software map renderer) and ships the tooling used: a mouse-driven VNC controller, an NMEA GPS feeder, a Windows CE API tracer on QEMU's gdbstub, PE patching and stub-DLL generators, and small in-guest test programs. See [Emulator/README.md](Emulator/README.md) for the details and the current limits (no vehicle data, Bluetooth or GL ES yet).
+
 ## Apps
 
 Additional apps add new features to the device. The following apps are available in the repository.
