@@ -71,13 +71,17 @@ if [ ! -f "$NAV/flash_shim/.done" ]; then
     | xargs -0 python3 -I "$HERE/cestub.py" patch --names "$NAV/os/rom/modules" \
         --stub-dlls svoxdll.dll "$WORK/rom_vexpress/modules" cestub.dll \
     | tee "$NAV/shim.log"
-  syms=$(grep '^stub must export:' "$NAV/shim.log" | sed 's/^stub must export: //')
-  python3 -I "$HERE/cestub.py" make-stub "$NAV/cestub.dll" $syms
+  syms=$(grep '^stub must export:' "$NAV/shim.log" | sed 's/^stub must export: //' | tr ' ' '\n' | grep -v '^GetSystemPowerStatusEx$' | tr '\n' ' ')
+  # GetSystemPowerStatusEx must fill its 24-byte SYSTEM_POWER_STATUS_EX: AC
+  # on-line, battery high, 100 %, unknown lifetimes, backup battery 100 %.
+  # (Exactly 24 bytes: the callers keep the struct on the stack.)
+  printf '\1\1\144\0\377\377\377\377\377\377\377\377\0\1\144\0\377\377\377\377\377\377\377\377' > "$WORK/powerstatus.bin"
+  (cd "$WORK" && python3 -I "$HERE/cestub.py" make-stub "$NAV/cestub.dll" GetSystemPowerStatusEx=fill:powerstatus.bin $syms)
   find "$NAV/flash_shim" -name '*.orig' -delete
   # the stub and the device's \Windows DLLs next to every executable
-  for d in $(find "$NAV/flash_shim" -iname '*.exe' -printf '%h\n' | sort -u) "$NAV/flash_shim"; do
+  for d in $(find "$NAV/flash_shim" -iname '*.exe' -not -path '*/0emu/*' -printf '%h\n' | sort -u) "$NAV/flash_shim"; do
     cp "$NAV/cestub.dll" "$d/"
-    cp "$NAV"/os/rom/files/*.[dD][lL][lL] "$d/" 2>/dev/null || true
+    cp "$NAV"/os/rom/files/*.[dD][lL][lL] "$NAV"/os/rom/files/*.ttf "$d/" 2>/dev/null || true
   done
   cp "$HERE/emu_start.mscr" "$NAV/flash_shim/"
   touch "$NAV/flash_shim/.done"
@@ -88,21 +92,28 @@ echo ">> 6b. emulated hidden flash (WolfSpecial.dll replacement)"
 # Cartesio board. This stub serves a 2 KB hidden-flash image from a file
 # instead. Drop a dump of your own unit's hidden flash in work/hidden_flash.bin
 # to get its brand / VIN pairing / serial; set WOLF_STUB=0 to keep the real DLL.
+# Calling conventions were recovered from HWLHardwareLayer.dll's call sites:
+# GetHWVersion(index, wbuf, len), GetOSVersion/GetBTVersion(wbuf, len),
+# GetDeviceID(wbuf, len), ReadBTAddressFromHF(buf6, 6), GetPowerSource() ->
+# 1 charger / 2 usb / 3 cradle, GetDeviceBrightness() -> value, cradle = not docked.
 if [ "${WOLF_STUB:-1}" = 1 ]; then
-  [ -f "$WORK/hidden_flash.bin" ] || head -c 2048 /dev/zero > "$WORK/hidden_flash.bin"
+  # Without a dump, mkflash.py writes a flash that says "paired with a VW
+  # (Fender sound) with this VIN", which is what gets the apps past the
+  # "connect your device to your brand new car" screen. VIN=... overrides.
+  [ -f "$WORK/hidden_flash.bin" ] || python3 -I "$HERE/mkflash.py" --out "$WORK/hidden_flash.bin" ${VIN:+--vin "$VIN"}
   mkdir -p "$NAV/wolfstub"
   (cd "$WORK" && python3 -I "$HERE/cestub.py" make-stub "$NAV/wolfstub/WolfSpecial.dll" \
     ReadHiddenFlash=blob:hidden_flash.bin WriteHiddenFlash=blobw:hidden_flash.bin \
-    GetDeviceID=str:EMU0000001 GetHWVersion=str:1.0 GetBTVersion=str:1.0 GetOSVersion=str:2.33 \
-    GetBootLoaderVersion=str:1.0 ReadBTAddressFromHF=str:00:11:22:33:44:55 \
-    BackToFactorySettings=1 GetDeviceBrightness=1 GetDisplayState=1 GetExternalAudioMutePin=1 \
+    GetDeviceID=wstr:EMU0000001 GetHWVersion=wstr1:1.0 GetBTVersion=wstr:1.0 GetOSVersion=wstr:2.33 \
+    GetBootLoaderVersion=wstr:1.0 ReadBTAddressFromHF=0 \
+    BackToFactorySettings=1 GetDeviceBrightness=80 GetDisplayState=1 GetExternalAudioMutePin=1 \
     GetGPRSModemPowerState=1 GetHWWatchdogState=1 GetHWWatchdogTimeout=1 GetPowerSource=1 \
-    GetSpeakerMode=1 Gpio_control=1 IsCradleStatusConnected=1 RefreshHWWatchdog=1 ResetBTChip=1 \
+    GetSpeakerMode=1 Gpio_control=1 IsCradleStatusConnected=0 RefreshHWWatchdog=1 ResetBTChip=1 \
     ResetGPRSModemState=1 SetDeviceBrightness=1 SetDisplayState=1 SetExternalAudioMutePin=1 \
     SetGPRSModemPowerState=1 SetHWWatchdogState=1 SetHWWatchdogTimeout=1 SetLoaderTextColor=1 \
     SetNoSWFoundImagePath=1 SetSpeakerMode=1 SetSplashImagePath=1 SetTCPWindowSize=1 \
     SetUSBModeImagePath=1 TouchCalibration=1 WriteBTAddressToHF=1)
-  for d in $(find "$NAV/flash_shim" -iname '*.exe' -printf '%h\n' | sort -u); do
+  for d in $(find "$NAV/flash_shim" -iname '*.exe' -not -path '*/0emu/*' -printf '%h\n' | sort -u); do
     cp "$NAV/wolfstub/WolfSpecial.dll" "$d/"
   done
 fi
@@ -134,6 +145,14 @@ mklnk "6 tc"       '"\My Flash Disk\Apps\TotalCommander\tc.exe"'
 mklnk "7 watchdog" '"\My Flash Disk\WatchdogPuppy.exe" Watchdog_HW.ini'
 cp "$HERE"/guest-tools/bin/*.exe "$NAV/flash_shim/0emu/"
 : > "$NAV/flash_shim/BrandDevice.reg"
+# The car's BAP link: the device uses COM9:, the second QEMU UART is COM1:
+# (run-emulator.sh exposes it on 127.0.0.1:5555). flash_shim is hard-linked
+# to flash, so replace the file instead of editing it in place.
+ini="$NAV/flash_shim/VwUserShell/VwCommunicationManager.ini"
+sed 's/^ComPort=.*/ComPort=1/' "$NAV/flash/VwUserShell/VwCommunicationManager.ini" > "$ini.new" && mv -f "$ini.new" "$ini"
+# SplashAnimation.exe needs sgalib.dll (the Cartesio graphics accelerator);
+# the brand app starts it after pairing and it only produces an error box here.
+[ -f "$NAV/flash_shim/SplashAnimation.exe" ] && mv "$NAV/flash_shim/SplashAnimation.exe" "$NAV/flash_shim/SplashAnimation.exe.off"
 [ -f "$NAV/flash_shim/VwBrandDevice/Settings/UserSettingsDevMode.default" ] || cat > "$NAV/flash_shim/VwBrandDevice/Settings/UserSettingsDevMode.default" <<'XML'
 <?xml version="1.0" encoding="ISO-8859-1"?>
 <Settings>

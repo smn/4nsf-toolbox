@@ -14,6 +14,15 @@ immediates. The device is 480x272 and the Navigon skins are keyed on that
 ("R480x272"), so --display 480x272 rewrites those immediates. The patch
 checks every original instruction word before touching it.
 
+mmtimer: the image's mmtimer.dll (Compact 7) only initialises its state in
+timeSetEvent. timeKillEvent then calls through a null function pointer, so a
+process that kills a timer it never set is torn down by a prefetch abort at
+PC=0. VwUserShell.exe does exactly that (a timer object with an uninitialised
+second timer id is destroyed on the way out of its constructor's caller), and
+on the device's CE 6 mmtimer that is harmless. The patch sends timeKillEvent
+through a 7-word stub in the section's zero padding that returns
+MMSYSERR_INVALPARAM while mmtimer is uninitialised. Always applied.
+
 Usage: patch_image.py [--display 480x272] IN.raw OUT.raw
 """
 import re
@@ -33,6 +42,32 @@ DISPLAY_480x272 = [
     (0x80002230, 0xE3A02F96, 0xE3A02E11),  # height (second query)
 ]
 
+# mmtimer.dll in this image: .text rva 0x1000 is at file offset 0x85f000
+# (ROM o32 dataptr 0x8085f000), module slot 0x40480000, vsize 0x1293 of a
+# 0x2000 page-padded section. (file offset, expected word, replacement)
+MMTIMER_TEXT = 0x85f000
+MMTIMER_FIX = [
+    (MMTIMER_TEXT + 0xb4c, 0xE92D4FF0, 0xEA0001EB),  # timeKillEvent: b stub
+    (MMTIMER_TEXT + 0x1300, 0, 0xE59F3014),  # stub: ldr r3, =g_pfnLock
+    (MMTIMER_TEXT + 0x1304, 0, 0xE5933000),  # ldr r3, [r3]
+    (MMTIMER_TEXT + 0x1308, 0, 0xE3530000),  # cmp r3, #0
+    (MMTIMER_TEXT + 0x130C, 0, 0x03A0000B),  # moveq r0, #MMSYSERR_INVALPARAM
+    (MMTIMER_TEXT + 0x1310, 0, 0x012FFF1E),  # bxeq lr
+    (MMTIMER_TEXT + 0x1314, 0, 0xE92D4FF0),  # push {r4-r11, lr} (displaced)
+    (MMTIMER_TEXT + 0x1318, 0, 0xEAFFFE0C),  # b timeKillEvent+4
+    (MMTIMER_TEXT + 0x131C, 0, 0x404833B4),  # &g_pfnLock (set by timeInit)
+]
+
+
+def apply_words(d, table, what):
+    for off, old, new in table:
+        cur = struct.unpack_from("<I", d, off)[0]
+        if cur != old:
+            print(f"{what}: unexpected word {cur:#x} at file offset {off:#x} (wanted {old:#x}); is this the 2022-04-17 image?")
+            return False
+        struct.pack_into("<I", d, off, new)
+    return True
+
 
 def main():
     args = sys.argv[1:]
@@ -49,14 +84,12 @@ def main():
         if display != "480x272":
             print("only 480x272 is supported")
             return 2
-        for va, old, new in DISPLAY_480x272:
-            off = va - 0x80000000
-            cur = struct.unpack_from("<I", d, off)[0]
-            if cur != old:
-                print(f"unexpected word {cur:#x} at {va:#x} (wanted {old:#x}); is this the 2022-04-17 image?")
-                return 1
-            struct.pack_into("<I", d, off, new)
+        if not apply_words(d, [(va - 0x80000000, o, n) for va, o, n in DISPLAY_480x272], "display"):
+            return 1
         print(f"display patched to {display}")
+    if not apply_words(d, MMTIMER_FIX, "mmtimer"):
+        return 1
+    print("mmtimer timeKillEvent guarded")
     old = "Mounted Volume".encode("utf-16le")
     new = "My Flash Disk".encode("utf-16le") + b"\0\0"
     assert len(old) == len(new)

@@ -6,10 +6,12 @@ Two sub-commands:
   cestub.py make-stub OUT.dll NAME[=SPEC] [NAME[=SPEC] ...]
       Build a tiny ARM Windows CE DLL exporting each NAME. SPEC is a return
       value (default 0), "str:TEXT" / "wstr:TEXT" (copies TEXT as ANSI /
-      UTF-16 into the buffer argument and returns 1), "blob:FILE" (for
+      UTF-16 into the first argument and returns 1), "wstr1:TEXT" (same into
+      the second argument, e.g. GetHWVersion(index, buf, len)), "blob:FILE" (for
       (buf, len, offset): copies FILE[offset:] into buf, returns len),
-      "blob_obl:FILE" (same for (offset, buf, len), returns 1) or
-      "blobw:FILE" (writes buf into the blob).
+      "blob_obl:FILE" (same for (offset, buf, len), returns 1), "blobw:FILE"
+      (writes buf into the blob) or "fill:FILE" (copies the whole file into
+      the struct passed in r0 and returns TRUE, e.g. GetSystemPowerStatusEx).
       No toolchain needed. Used to replace WolfSpecial.dll with an emulated
       hidden flash.
 
@@ -69,6 +71,12 @@ BLOB_READ_OBL = [0xE59F3004, 0xE08F3003, 0xEA000000, 0,        # r0=off r1=buf r
 WSTR_COPY = [0xE59F3004, 0xE08F3003, 0xEA000000, 0,              # r0=wide buf
              0xE0D320B2, 0xE0C020B2, 0xE3520000, 0x1AFFFFFB,
              0xE3A00001, 0xE12FFF1E]
+WSTR1_COPY = [0xE59F3004, 0xE08F3003, 0xEA000000, 0,             # r1=wide buf (2nd arg)
+              0xE0D320B2, 0xE0C120B2, 0xE3520000, 0x1AFFFFFB,
+              0xE3A00001, 0xE12FFF1E]
+FILL_COPY = [0xE59F3004, 0xE08F3003, 0xEA000000, 0,              # r0=struct ptr
+             0xE493C004, 0xE35C0000, 0x0A000003, 0xE4D32001,    # ip=len (u32 before blob)
+             0xE4C02001, 0xE24CC001, 0xEAFFFFF9, 0xE3A00001, 0xE12FFF1E]
 DELTA_INDEX = 3  # the .word; add r3,pc,r3 sits at word 1, so pc there = off+12
 
 
@@ -90,13 +98,22 @@ def make_stub(out, names, base=0x10000):
     for n in names:
         v = specs[n]
         stub_rvas.append(len(code))
-        if v.startswith("str:") or v.startswith("wstr:"):
-            wide = v.startswith("wstr:")
-            text = v.split(":", 1)[1]
+        if v.split(":")[0] in ("str", "wstr", "wstr1"):
+            kind, text = v.split(":", 1)
+            wide = kind != "str"
             key = v
             blobs[key] = text.encode("utf-16le") + b"\0\0" if wide else text.encode() + b"\0"
             fixups.append((len(code) + 4 * DELTA_INDEX, key))
-            code += b"".join(struct.pack("<I", w) for w in (WSTR_COPY if wide else STR_COPY))
+            tmpl = {"str": STR_COPY, "wstr": WSTR_COPY, "wstr1": WSTR1_COPY}[kind]
+            code += b"".join(struct.pack("<I", w) for w in tmpl)
+        elif v.startswith("fill:"):
+            # copy the whole file into the struct the caller passes in r0, return TRUE
+            fn = v.split(":", 1)[1]
+            data = open(fn, "rb").read()
+            key = "fill:" + fn
+            blobs[key] = struct.pack("<I", len(data)) + data
+            fixups.append((len(code) + 4 * DELTA_INDEX, key))
+            code += b"".join(struct.pack("<I", w) for w in FILL_COPY)
         elif v.split(":")[0] in ("blob", "blobw", "blob_obl"):
             kind, fn = v.split(":", 1)
             key = "file:" + fn
@@ -348,51 +365,91 @@ def patch_file(path, image_exports, stub_name, stub_dlls=(), ref_names=None):
     if not new_descs:
         return []
 
-    # build new section: descriptors + ILTs + names
+    # Build the new section: descriptors + per-symbol ILT/IAT + names.
+    # Windows CE's loader resolves from the IAT entries themselves (it does
+    # not honour OriginalFirstThunk), so a shimmed symbol gets its own IAT
+    # slot in this section and every reference to the old slot (the import
+    # thunks' literal pools) is repointed to it.
+    image_base = struct.unpack_from("<I", pe.d, pe.opt + 28)[0]
     blob = bytearray()
     desc_count = len(descs) + sum(1 for x in new_descs if len(x) == 2)
     desc_bytes = 20 * (desc_count + 1)
     blob += b"\0" * desc_bytes
-    # copy original descriptors (whole-DLL redirects get renamed below)
     for i, desc in enumerate(descs):
         struct.pack_into("<IIIII", blob, 20 * i, desc["ilt"], 0, 0, desc["name_rva"], desc["iat"])
     stub_name_rva_off = len(blob)
     blob += stub_name.encode() + b"\0"
 
     def add_name(sym):
+        while len(blob) % 2:
+            blob.append(0)
         off = len(blob)
         blob.extend(struct.pack("<H", 0) + sym.encode() + b"\0")
-        if len(blob) % 2:
-            blob.append(0)
         return off
 
+    while len(blob) % 4:
+        blob.append(0)
     di = len(descs)
+    slot_moves = []   # (old slot va, new slot va)
     for item in new_descs:
         if len(item) == 2:
-            sym, iat_rva = item
-            ilt_off = len(blob)
-            blob += b"\0" * 8  # one entry + terminator, filled after RVA known
+            sym, old_iat_rva = item
             name_off = add_name(sym)
-            struct.pack_into("<IIIII", blob, 20 * di, 0, 0, 0, 0, iat_rva)
-            blob_fix.append((di, ilt_off, [name_off]))
+            while len(blob) % 4:
+                blob.append(0)
+            ilt_off = len(blob); blob += b"\0" * 8
+            iat_off = len(blob); blob += b"\0" * 8
+            blob_fix.append((di, ilt_off, iat_off, [name_off]))
+            slot_moves.append((image_base + old_iat_rva, iat_off))
             di += 1
         else:
             syms, iat_rva, desc_off = item
-            # find index of this descriptor in original list
             idx = next(i for i, dsc in enumerate(descs) if dsc["desc_off"] == desc_off)
-            ilt_off = len(blob)
-            blob += b"\0" * (4 * (len(syms) + 1))
             name_offs = [add_name(s) for s in syms]
-            struct.pack_into("<IIIII", blob, 20 * idx, 0, 0, 0, 0, iat_rva)
-            blob_fix.append((idx, ilt_off, name_offs))
+            while len(blob) % 4:
+                blob.append(0)
+            ilt_off = len(blob); blob += b"\0" * (4 * (len(syms) + 1))
+            # whole-DLL redirect: keep the original IAT (names are looked up
+            # from it), so write the name entries into the original IAT too
+            blob_fix.append((idx, ilt_off, None, name_offs))
+            slot_moves.append(("iat-names", iat_rva, name_offs))
     rva = pe.add_section(b".shim", bytes(blob))
     d = pe.d
     sec_rp = pe.secs[-1]["rp"]
-    for di, ilt_off, name_offs in blob_fix:
-        struct.pack_into("<I", d, sec_rp + 20 * di, rva + ilt_off)       # OriginalFirstThunk
-        struct.pack_into("<I", d, sec_rp + 20 * di + 12, rva + stub_name_rva_off)  # Name
+    for di, ilt_off, iat_off, name_offs in blob_fix:
+        struct.pack_into("<I", d, sec_rp + 20 * di, rva + ilt_off)
+        struct.pack_into("<I", d, sec_rp + 20 * di + 12, rva + stub_name_rva_off)
+        if iat_off is not None:
+            struct.pack_into("<I", d, sec_rp + 20 * di + 16, rva + iat_off)
         for k, no in enumerate(name_offs):
             struct.pack_into("<I", d, sec_rp + ilt_off + 4 * k, rva + no)
+            if iat_off is not None:
+                struct.pack_into("<I", d, sec_rp + iat_off + 4 * k, rva + no)
+    for mv in slot_moves:
+        if mv[0] == "iat-names":
+            _, iat_rva, name_offs = mv
+            for k, no in enumerate(name_offs):
+                struct.pack_into("<I", d, pe.r2o(iat_rva) + 4 * k, rva + no)
+            continue
+        old_va, iat_off = mv
+        new_va = image_base + rva + iat_off
+        needle = struct.pack("<I", old_va)
+        moved = 0
+        for s in pe.secs[:-1]:
+            lo, hi = s["rp"], s["rp"] + s["rs"]
+            pos = lo
+            while True:
+                pos = d.find(needle, pos, hi)
+                if pos < 0 or pos % 4:
+                    if pos < 0:
+                        break
+                    pos += 1
+                    continue
+                struct.pack_into("<I", d, pos, new_va)
+                moved += 1
+                pos += 4
+        if not moved:
+            print(f"  warning: no reference to slot {old_va:#x} found")
     struct.pack_into("<II", d, pe.opt + 104, rva, desc_bytes)
     os.replace(path, path + ".orig") if not os.path.exists(path + ".orig") else None
     with open(path, "wb") as f:

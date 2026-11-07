@@ -6,7 +6,7 @@ and can load the complete VW "maps + more" software (Navigon 7.16.9, OS
 or the package is committed to git; the scripts rebuild everything into
 `Emulator/work/`.
 
-![Total Commander/CE from this repo running inside QEMU](screenshot-totalcommander-in-qemu.png)
+![The VW "maps + more" shell running inside QEMU](screenshot-vw-shell.png)
 
 ## What the real device is
 
@@ -51,6 +51,16 @@ To start a program in the guest use **Start > Run...** with a quoted path:
 "\My Flash Disk\MortScript.exe" "\My Flash Disk\emu_start.mscr"
 ```
 
+In `--navigon` mode open `\My Flash Disk\0emu` in the Explorer window and
+double-click `launch-all.exe`: it starts `VwCommunicationExe`, `VwBrandDevice`
+and `VwUserShell` with the device's command lines and the VW main menu
+appears after about a minute. Headless, the same with the mouse over VNC:
+
+```sh
+pip install vncdotool pillow
+Emulator/tools/vnc.py 0emu dbl 188 143 60 shot menu     # menu.png = the shell
+```
+
 ## Where the Navigon software comes from
 
 Volkswagen still hosts the Garmin-labelled PID update at
@@ -75,67 +85,102 @@ the back. The emulator never flashes anything, it only unpacks files.
 | `sfx_extract.py` | Unpacks the ExtractorCE `!NAVIGON_SFX!` archives (format documented in the file) with per-file MD5 check |
 | `ceromdump.py` | Dumps a Windows CE ROM image: rebuilds every XIP module as a loadable PE file, copies the ROM files, flags compressed ones |
 | `celzx.py` | Decompresses ROM-compressed files (24-bit block table, 4 KB LZX blocks); verified byte-exact against a copy of the same DLL on the flash disk |
-| `patch_image.py` | Renames the Compact 7 image's disk mount from `Mounted Volume` to `My Flash Disk`; `--display 480x272` rewrites the OAL's hardcoded 1024x600 mode and PL111 timings |
+| `patch_image.py` | Renames the Compact 7 image's disk mount from `Mounted Volume` to `My Flash Disk`; `--display 480x272` rewrites the OAL's hardcoded 1024x600 mode and PL111 timings; guards the image's `mmtimer.dll` against `timeKillEvent` before `timeSetEvent` (see below) |
 | `cestub.py` | `make-stub` builds an ARM CE DLL without a toolchain: exports returning a value, copying a string, or serving a file-backed blob (used for `WolfSpecial.dll` with an emulated hidden flash and for a whole stub `HWLHardwareLayer.dll`); `patch` rewrites a PE's import table so symbols the target image lacks come from the stub, and can rename import DLLs |
 | `guest-tools/` | Hand-assembled CE test programs (sockets, timers, GDI, window list, thread stacks, app launchers) and their generators, copied to the disk's `0emu` folder |
+| `mkflash.py` | Writes the emulated 2 KB hidden flash: validity signature, brand, "paired" flag and VIN in the layout the VW apps read (documented in the file). `VIN=... build-navigon.sh` sets your own VIN |
+| `tools/` | Host-side debugging: mouse-driven VNC control, a Windows CE API tracer on QEMU's gdbstub, and disassembly/call-graph helpers for the ARM binaries (see `tools/README.md`) |
 | `mkdisk.py` | MBR + FAT32 disk image from folders, using mtools |
 | `emu_start.mscr` | MortScript for the guest: registry setup from the device's `autorunce.mscr`, then the application chain from `Watchdog_HW.ini`. MortScript itself runs in the VM, but this script has not yet been seen to start the chain; the three Run commands below are the verified route |
 
 `cestub.py patch` found only 16 coredll functions (RAS and TAPI used by
 `BTCore.exe` and `navigon.exe`, `GetSystemPowerStatusEx` used by every
 hardware-layer DLL) and one DLL (`svoxdll.dll`) that the Compact 7 image lacks.
-The device ROM's own DLLs that the apps load at run time (`WolfSpecial.dll`,
-`nfVR.dll`, `openGL_ES_STA2065.dll`, MFC 9.0, fonts) are copied next to each
-executable.
+`GetSystemPowerStatusEx` is the one stub that must do work: it fills the
+caller's 24-byte `SYSTEM_POWER_STATUS_EX` with "AC on-line, battery full"
+(anything larger overruns the caller's stack frame). The device ROM's own
+DLLs that the apps load at run time (`WolfSpecial.dll`, `nfVR.dll`,
+`openGL_ES_STA2065.dll`, MFC 9.0, fonts) are copied next to each executable.
 
 ## How far it runs
 
-Verified in this repository's history, screenshots in this folder:
+![Car info submenu](screenshot-vw-carinfo.png)
 
 - Generic mode: Windows CE desktop, disk mounts, Total Commander/CE from `Apps` runs.
-- Navigon mode: the image is patched to the device's 480x272 screen
-  (`screenshot-480x272.png`) and the disk mounts as `\My Flash Disk`.
-  `VwCommunicationExe.exe`, `VwBrandDevice.exe` and `VwUserShell.exe
-  -ShowWindow=1` start, keep running, load every library, create their
-  full-screen windows and sit in their message loops. The `0emu` folder on
-  the disk holds shortcuts and test programs so all of this is mouse-driven.
-- Not yet: neither the brand app nor the shell ever draws. Their windows are
-  visible but never blitted into, so the Explorer underneath shows through
-  and swallows clicks.
+- Navigon mode: the image runs at the device's 480x272 and the disk mounts as
+  `\My Flash Disk`. `VwCommunicationExe`, `VwBrandDevice` and `VwUserShell`
+  start as on the device, the brand app accepts the emulated hidden flash as
+  "paired with a Volkswagen" and exits, and **the VW main menu comes up**
+  (`screenshot-vw-shell.png`): Car info, Media, Navigation, Phone. The Car
+  info submenu (Trip computer, Think Blue. Trainer, Status) opens, Phone
+  starts `PhoneApplication.exe`, which draws its own UI ("no device
+  connected") in German.
+- Not yet: `PhoneApplication` spawns `BTCore.exe`, which the loader rejects
+  with "Unable to import library MAPBL.dll" although every import of that
+  DLL resolves; the Navigation tile (`navigon.exe`) and Media are untested;
+  the Explorer taskbar still covers the bottom 26 pixels; nothing feeds
+  vehicle data, GPS or Bluetooth yet.
 
-What has been ruled out, each with a test in `guest-tools/`:
+### What it took
 
-| Suspect | Result |
-|---|---|
-| Hardware layer (`HWLHardwareLayer.dll`, `WolfSpecial.dll`, hidden flash, `GMD1:`/`HFC1:`/`WDT1:`/`BKL1:` drivers) | Replacing the whole hardware layer with a stub (`HWL_STUB=1`) changes nothing. `ReadHiddenFlash` is served from `work/hidden_flash.bin`. |
-| TCP/IP and the legacy `WINSOCK.dll` the apps use | `socktest.exe`: socket, bind, listen, connect, accept, send, recv on 127.0.0.1 all work. |
-| Multimedia timer | `timertest7.exe`: periodic callbacks fire. The shell's crash in `timeKillEvent` (null pointer in the image's mmtimer.dll) only happens on its way out. |
-| GDI | `gditest.exe`: a 16 bpp DIB section blits into a popup window exactly as the apps do. |
-| Screen size (`R480x272` skins) | Image patched to 480x272. Windows become 480x272, still nothing drawn. |
-| `\MN Settings`, `\Storage Card`, COM port, DevMode VIN, empty `BrandDevice.reg` | No change. |
-| Blocked threads | `stacks.exe`: main threads idle in `GetMessageW`, AppCom thread in `recvfrom`, a timer thread in mmtimer; nothing spins. The window procedure only calls `BeginPaint`/`EndPaint`; drawing happens from the apps' own engine, which never starts. |
+1. **Pairing.** Without a car the brand app shows "Connect your device to
+   your brand new car and switch the ignition on"
+   (`screenshot-vw-pairing.png`) and waits for the car's BAP identification.
+   The forum recipe (empty `BrandDevice.reg` plus a
+   `UserSettingsDevMode.default` with a VIN) does not get past it here. The
+   decision is made from the 2 KB hidden flash, read through
+   `WolfSpecial.dll`: byte `0x30` must be `'B'` and byte `0x2f` a known
+   brand (0 VW, 2 Seat, 3 Skoda), with the signature `123Kuckuck123` at
+   `0x10`, the VIN at `0x1e` and `0x36`, and sound/type/line/class bytes at
+   `0x32..0x35` (brand 0 + sound 2 selects the "Fender" splash screen).
+   `mkflash.py` writes exactly that; the layout was recovered from every
+   `ReadFlash`/`WriteFlash` call site in `VwBrandDevice.exe` and
+   `VwUserShell.exe` with `tools/callers.py`. On the device `BrandDevice.reg`
+   is a settings store the brand app migrates into the hidden flash once,
+   which is why an empty file "resets" the pairing there.
+2. **The shell's exit.** `VwUserShell.exe` died a few seconds after start with
+   `PC=0 RA=mmtimer.dll+0x1b78`. The API trace (`tools/trace.gdb.py`) showed
+   a `timeKillEvent` with a garbage id and no `timeSetEvent` before it: the
+   shell's timer class leaves its second timer id uninitialised and the
+   destructor kills it anyway. The device's CE 6 `mmtimer.dll` returns an
+   error; the Compact 7 one calls a lock function pointer that only
+   `timeInit` (run from `timeSetEvent`) sets. `patch_image.py` now routes
+   `timeKillEvent` through a 7-word stub in the section's padding that
+   returns `MMSYSERR_INVALPARAM` until mmtimer is initialised.
+3. **Power status.** Every hardware-layer DLL polls `GetSystemPowerStatusEx`,
+   which the image lacks; the stub fills a plausible 24-byte struct.
+4. **Splash.** After pairing the brand app runs `SplashAnimation.exe`, which
+   needs the Cartesio graphics accelerator (`sgalib.dll`, SGA ioctls); it is
+   renamed away on the emulator disk.
 
-The device ROM's own modules cannot be transplanted: ROM modules are stored
-pre-relocated without fixups, so the CE 6 `mmtimer.dll` loaded at a new
-address corrupted its neighbour (`wspm.dll`) and crashed the shell.
+Verified not to matter (tests in `guest-tools/`): TCP/IP and the legacy
+`WINSOCK.dll`, multimedia timers once initialised, GDI DIB blits, the whole
+hardware layer (`HWL_STUB=1` behaves the same as the real DLL on the stubbed
+`WolfSpecial.dll`). ROM modules of the device image cannot be transplanted:
+they are stored pre-relocated without fixups.
 
-## Next steps for a working UI
+## Next steps
 
-1. **AppCom.** The apps talk to each other with Navigon's AppCom (UDP on
-   127.0.0.1, ports in `NgAppCom.xml`). The brand app most likely waits for
-   vehicle data from `VwCommunicationExe`, which waits for the car's BAP
-   protocol on COM1 (`VwCommunicationManager.ini`, `ComPort=1` in the shim
-   copy). Feeding a BAP "no vehicle"/ignition sequence into QEMU's second
-   serial port, or sniffing AppCom with a small UDP tool on the disk, is the
-   most promising lead. AppCom has a logging switch (`AppComLogging`,
-   `AppComLogfilePath` strings in `ACAppCom.dll`) that this session could not
-   trigger from `NgAppCom.xml`.
-2. **Hidden flash contents.** Dump the real unit's 2 KB hidden flash (through
-   `WolfSpecial.dll` `ReadHiddenFlash` on the device) into
-   `work/hidden_flash.bin` so brand, VIN pairing and serial are genuine.
-3. **GPS.** Once `navigon.exe` runs, feed NMEA from `gpsfake` into QEMU's
-   `-serial` for `COM1:`.
-4. **Map licence.** Maps are keyed to the device serial from the OEM layer.
+1. **Bluetooth.** Find out why the loader rejects `MAPBL.dll` for
+   `BTCore.exe` (a `LoadLibrary` test program in `guest-tools/` with
+   `GetLastError` is the quickest check; the DLL depends on `MFC80U.DLL` and
+   `MSVCR80.DLL` from the same folder).
+2. **Navigation.** Start `navigon.exe` from the shell and from `0emu`; it
+   needs the GL ES / `nfVR` ROM DLLs that are already copied, and GPS: feed
+   NMEA from `gpsfake` into a third QEMU UART once it is up.
+3. **Vehicle data.** `VwCommunicationExe` now talks to `COM1:` (QEMU's second
+   UART on `127.0.0.1:5555`). Feeding BAP frames there, or writing into the
+   `VwSharedMemoryFileMapping` the shell reads (mutexes
+   `MessageFzgIdentMutex`, `MessageBsg3Mutex`, ... `BapAllMutex`), would light
+   up Car info with speed, RPM, fuel and the trip computer. The user manual
+   (`UserManualUK.pdf` from Garmin's VW support site) lists what the device
+   shows.
+4. **Full screen.** Hide the Explorer taskbar (registry `HKLM\Software\
+   Microsoft\Shell` or let the watchdog/`autorunce.mscr` replace the shell) so
+   the apps get the full 480x272 like on the device.
+5. **Hidden flash of a real unit.** Dump it through `WolfSpecial.dll`
+   `ReadHiddenFlash` on the device into `work/hidden_flash.bin` so brand, VIN
+   and serial are genuine (maps are keyed to the device serial).
 
 ## Files that stay out of git
 
