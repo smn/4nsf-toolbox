@@ -65,8 +65,8 @@ if [ "$headless" = 1 ]; then
   display=(-display none -vnc 127.0.0.1:1 -monitor "unix:$WORK/mon.sock,server,nowait")
   echo ">> headless: VNC 127.0.0.1:5901, monitor $WORK/mon.sock, serial log $WORK/serial.log"
 fi
-# gdbstub for tools/trace.sh; second UART (COM2: in the guest, the car's BAP
-# link for VwCommunicationExe) as a TCP server on 127.0.0.1:5555.
+# gdbstub for tools/trace.sh; the second UART (COM1: in the guest, Navigon's
+# GPS port, fed by tools/nmea.py) as a TCP server on 127.0.0.1:5555.
 extra+=(-gdb tcp:127.0.0.1:1234 -serial tcp:127.0.0.1:5555,server,nowait)
 
 exec qemu-system-arm \

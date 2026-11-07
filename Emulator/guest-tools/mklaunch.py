@@ -6,6 +6,23 @@ launch=""
 strings={"fmt":"EMUWIN: hwnd=%08x class='%s' title='%s' vis=%d rect=%d,%d,%d,%d","end":"EMUWIN: ---","start":"EMUWIN: launching"}
 for i,p in enumerate(procs):
     exe,_,args=p.partition("|")
+    if exe=="hidetaskbar":
+        # the Explorer taskbar covers the bottom 26 px of the 480x272 screen,
+        # where the VW apps and Navigon put their button bars
+        strings["taskbar"]="HHTaskBar"
+        launch+=f'''
+    ldr r0, =$taskbar
+    mov r1, #0
+    ldr r4, =@FindWindowW
+    ldr r4, [r4]
+    blx r4
+    cmp r0, #0
+    movne r1, #0
+    ldrne r4, =@ShowWindow
+    ldrne r4, [r4]
+    blxne r4
+'''
+        continue
     if exe=="mkdir":
         strings[f"dir{i}"]=args
         launch+=f'''
@@ -120,4 +137,4 @@ done:
     add sp, sp, #0x400
     pop {{r4-r8, pc}}
 '''
-m["build"](out, asm, {"COREDLL.dll":["CreateProcessW","CreateDirectoryW","Sleep","EnumWindows","GetClassNameW","GetWindowTextW","IsWindowVisible","GetWindowRect","wsprintfW","OutputDebugStringW"]}, strings)
+m["build"](out, asm, {"COREDLL.dll":["CreateProcessW","CreateDirectoryW","FindWindowW","ShowWindow","Sleep","EnumWindows","GetClassNameW","GetWindowTextW","IsWindowVisible","GetWindowRect","wsprintfW","OutputDebugStringW"]}, strings)

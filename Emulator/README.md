@@ -58,8 +58,13 @@ appears after about a minute. Headless, the same with the mouse over VNC:
 
 ```sh
 pip install vncdotool pillow
-Emulator/tools/vnc.py 0emu dbl 188 143 60 shot menu     # menu.png = the shell
+Emulator/tools/nmea.py --speed 30 --heading 45 &          # GPS receiver on COM1:
+Emulator/tools/vnc.py 0emu dbl 188 143 60 shot menu      # menu.png = the shell
+Emulator/tools/vnc.py click 135 170 20 shot navigon      # Navigation tile
 ```
+
+Navigon's first start asks for language, units and the EULA (six dialogs,
+first option + OK each); the map is under More functions > Show map.
 
 ## Where the Navigon software comes from
 
@@ -116,17 +121,21 @@ DLLs that the apps load at run time (`WolfSpecial.dll`, `nfVR.dll`,
   starts `PhoneApplication.exe`, which draws its own UI ("no device
   connected") in German.
 - **Navigation starts Navigon MobileNavigator 7** (`screenshot-navigon-menu.png`):
-  the first-start wizard (language, units, time and date format, EULA) and
-  the main menu (New destination, My destinations, Take me home, Voice
-  command) work; the shell's status bar picks up its state over AppCom.
-  Phone starts `BTCore.exe` and asks to search for Bluetooth devices; Media
-  is started hidden by the shell (`MediaPlayer.exe -Mode=NOCONN`).
-- Not yet: the map itself (the GL ES DLL reports `G4M_InitMemory: Error`
-  without the Cartesio accelerator; `GL_STUB=1` swaps it for a stub of all
-  190 exports), the Explorer taskbar still covers the bottom 26 pixels, and
-  nothing feeds vehicle data, GPS or Bluetooth yet.
+  the first-start wizard (language, units, time and date format, EULA), the
+  main menu (New destination, My destinations, Take me home, Voice command),
+  More functions, Settings and **the map** work. `tools/nmea.py` is the GPS
+  receiver: GPS status shows the fix, the position is reverse-geocoded from
+  the map data ("Schleiestrasse, 38448 Wolfsburg") and the car moves on the
+  3D map (`screenshot-navigon-map.png`). The shell's status bar picks up
+  Navigon's state over AppCom. Phone starts `BTCore.exe` and asks to search
+  for Bluetooth devices; Media is started hidden by the shell
+  (`MediaPlayer.exe -Mode=NOCONN`).
+- Not yet: vehicle data (Car info shows no values), Bluetooth and media
+  playback; the GL ES renderer (the map uses Navigon's software renderer, see
+  below); TMC and voice recognition are untested.
 
-![Navigon main menu](screenshot-navigon-menu.png)
+![Navigon map with the emulated GPS fix](screenshot-navigon-map.png)
+![Navigon GPS status](screenshot-navigon-gps.png)
 
 ### What it took
 
@@ -164,7 +173,18 @@ DLLs that the apps load at run time (`WolfSpecial.dll`, `nfVR.dll`,
    7 image does not have (`tools/depcheck.py` finds such gaps statically). A
    stub `ddraw.dll` whose `DirectDrawCreate` fails is enough for the DLL to
    load and the application to run.
-6. **A self-inflicted one.** `BTCore.exe` failed with "Unable to import
+6. **Map renderer.** With the GL ES DLL loaded but no accelerator
+   (`G4M_InitMemory: Error`) "Show map" crashed `navigon.exe` in `memcpy`,
+   with the real DLL and with a stub of all 190 exports alike. Navigon still
+   carries its older eGML software map drawer (`DrawingSurfaceImplEGML`):
+   `<OldMapDrawer>1</OldMapDrawer>` in `UserSettings.default` selects it and
+   the map draws, 3D view included. `OLD_MAP_DRAWER=0` restores the device
+   setting for anyone emulating the GL ES side.
+7. **Taskbar.** The Explorer taskbar covered the bottom 26 pixels, exactly
+   where the VW apps and Navigon put their button bars. `launch-all.exe`
+   hides it (`FindWindow("HHTaskBar")` + `ShowWindow(SW_HIDE)`) before
+   starting the apps.
+8. **A self-inflicted one.** `BTCore.exe` failed with "Unable to import
    library MAPBL.dll": the package ships a newer `BT\MAPBL.dll` than the ROM,
    and the build script's copy of ROM DLLs next to each executable had
    overwritten it through the hard link into the pristine tree. The copy is
@@ -180,14 +200,17 @@ they are stored pre-relocated without fixups.
 
 ## Next steps
 
-1. **Map rendering.** Navigon draws the map through GL ES on the Cartesio
-   SGA. Options: a software GL ES 1.x for CE ARM behind the same 190 exports
-   (the stub shows which calls the map needs), or Navigon's own 2D fallback
-   if it has one (it keeps running with GL init failed).
-2. **GPS.** Feed NMEA from `gpsfake` into a third QEMU UART and point
-   Navigon's GPS settings at it.
-3. **Vehicle data.** `VwCommunicationExe` now talks to `COM1:` (QEMU's second
-   UART on `127.0.0.1:5555`). Feeding BAP frames there, or writing into the
+1. **GL ES map renderer.** The device draws the map through GL ES 1.x on the
+   Cartesio SGA; the emulator uses Navigon's software drawer. A software GL
+   ES 1.1 for CE ARM behind the same 190 exports (Vincent 3D was written for
+   exactly this platform) would bring the device's renderer back; it needs a
+   CE cross-compiler (cegcc / mingw32ce).
+2. **GPS routes.** `tools/nmea.py` moves the car along a heading; replaying
+   a recorded NMEA log (or `gpsfake`) into port 5555 gives real drives.
+3. **Vehicle data.** `VwCommunicationExe` reads the car's BAP link from
+   `COM9:` on the device; the image has a single serial port and that one is
+   the GPS now. Adding a second pl011 instance to the image's registry (the
+   vexpress board has four UARTs) and feeding BAP frames there, or writing into the
    `VwSharedMemoryFileMapping` the shell reads (mutexes
    `MessageFzgIdentMutex`, `MessageBsg3Mutex`, ... `BapAllMutex`), would light
    up Car info with speed, RPM, fuel and the trip computer. The user manual

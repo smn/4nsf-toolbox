@@ -6,6 +6,7 @@ needed just to boot the VM.
 | Tool | Purpose |
 |---|---|
 | `vnc.py` | Mouse-drives the headless VM over VNC: `vnc.py 0emu dbl 188 143 40 shot menu` opens the `0emu` folder, double-clicks `launch-all.exe` and saves `menu.png`. Keyboard input through VNC doubles characters in this guest, so everything is clicks plus screenshot checks (`ref/*.png` are the Explorer address-bar crops it compares against). `pip install vncdotool pillow`. |
+| `nmea.py` | GPS receiver for the VM: sends NMEA (GGA, RMC, GSA, GSV, VTG) at 1 Hz into QEMU's second UART on 127.0.0.1:5555, which the guest sees as `COM1:` and Navigon is configured to read. `--lat/--lon/--speed/--heading` move the car. |
 | `trace.gdb.py` | Windows CE API tracer on QEMU's gdbstub. It puts breakpoints on coredll exports (addresses from `coredll_exports.txt`, the export table of the image's coredll.dll) and on mmtimer, decodes the interesting arguments (file names, window classes, event names, timer ids) and logs one line per call with the caller's `lr`. See `trace.sh`. |
 | `trace.sh` | Starts the tracer against the VM from `run-emulator.sh --headless` (gdb on 127.0.0.1:1234). Attach it after the clicks that need exact timing: breakpoints slow the guest down. |
 | `disas.py` | Small capstone/pefile front end for the ARM CE binaries: `xref` (who references a wide string), `dis ADDR LEN [arm]`, `func ADDR` (whole function via `.pdata`), `imports`, `exports`. Resolves literal pools to strings and import names. |

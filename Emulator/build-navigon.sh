@@ -168,11 +168,19 @@ mklnk "t3 load GLES"   '"\My Flash Disk\0emu\loadtest.exe" "\My Flash Disk\NAVIG
 mklnk "t4 load ddraw"  '"\My Flash Disk\0emu\loadtest.exe" ddraw.dll'
 cp "$HERE"/guest-tools/bin/*.exe "$NAV/flash_shim/0emu/"
 : > "$NAV/flash_shim/BrandDevice.reg"
-# The car's BAP link: the device uses COM9:, the second QEMU UART is COM1:
-# (run-emulator.sh exposes it on 127.0.0.1:5555). flash_shim is hard-linked
-# to flash, so replace the file instead of editing it in place.
-ini="$NAV/flash_shim/VwUserShell/VwCommunicationManager.ini"
-sed 's/^ComPort=.*/ComPort=1/' "$NAV/flash/VwUserShell/VwCommunicationManager.ini" > "$ini.new" && mv -f "$ini.new" "$ini"
+# GPS: the device's receiver is on COM2:; the image has exactly one pl011
+# serial port, COM1: = QEMU's second UART, which run-emulator.sh exposes on
+# 127.0.0.1:5555 for tools/nmea.py. (The car's BAP link, COM9: on the
+# device, stays unconnected.) Without a fix Navigon resets the device after
+# NoGpsCheckTime seconds, so that is raised to a day. flash_shim is
+# hard-linked to flash, so files are replaced, never edited in place.
+us="$NAV/flash_shim/NAVIGON/Settings/UserSettings.default"
+# Navigon's "old" map drawer is its eGML software renderer; the default GL ES
+# one needs the Cartesio accelerator and crashes without it. OLD_MAP_DRAWER=0
+# keeps the device setting (for working on GL ES emulation).
+sed -e 's|<GPSPort>2</GPSPort>|<GPSPort>1</GPSPort>|' -e "s|<OldMapDrawer>0</OldMapDrawer>|<OldMapDrawer>${OLD_MAP_DRAWER:-1}</OldMapDrawer>|" "$NAV/flash/NAVIGON/Settings/UserSettings.default" > "$us.new" && mv -f "$us.new" "$us"
+as="$NAV/flash_shim/NAVIGON/Settings/ApplicationSettings.xml"
+sed 's|<NoGpsCheckTime>300</NoGpsCheckTime>|<NoGpsCheckTime>86400</NoGpsCheckTime>|' "$NAV/flash/NAVIGON/Settings/ApplicationSettings.xml" > "$as.new" && mv -f "$as.new" "$as"
 # SplashAnimation.exe needs sgalib.dll (the Cartesio graphics accelerator);
 # the brand app starts it after pairing and it only produces an error box here.
 [ -f "$NAV/flash_shim/SplashAnimation.exe" ] && mv "$NAV/flash_shim/SplashAnimation.exe" "$NAV/flash_shim/SplashAnimation.exe.off"

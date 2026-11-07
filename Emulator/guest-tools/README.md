@@ -17,8 +17,10 @@ They print to the kernel debug output, which `run-emulator.sh` writes to
 | `wintest.exe` | enumerates every top-level window (class, title, visible, rect) 12 times |
 | `stacks.exe` | lists processes, modules and the call stack of every thread (toolhelp + GetThreadCallStack), 6 samples |
 | `loadtest.exe PATH` | `LoadLibraryW(PATH)`, then a message box and an `EMULOAD:` serial line with the handle and `GetLastError` (which DLL the loader really rejects) |
-| `launch-all.exe` / `launch-brand.exe` / `launch-shell.exe` | start the VW apps with their real command lines, then log windows for two minutes |
+| `launch-all.exe` / `launch-brand.exe` / `launch-shell.exe` | hide the Explorer taskbar (it covers the apps' bottom button bars), start the VW apps with their real command lines, then log windows for two minutes |
 
 Results on the 2022-04-17 Compact 7 image: sockets, timers and GDI blits all
 work; the VW apps create their windows and sit idle in their message loops
 without ever blitting.
+
+`build.sh` regenerates every binary in `bin/` (set `PYTHON` to an interpreter that has keystone-engine).
