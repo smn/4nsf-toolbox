@@ -32,7 +32,7 @@ $(BIN)/hello.exe: samples/hello/hello.c | $(BIN)
 	$(STRIP) $@
 
 $(BIN)/hellocpp.exe: samples/hello/hellocpp.cpp | $(BIN)
-	$(CXX) $(CFLAGS) -std=c++17 $(LDFLAGS) -o $@ $<
+	$(CXX) $(CFLAGS) -std=gnu++17 $(LDFLAGS) -o $@ $<
 	$(STRIP) $@
 
 $(BIN)/ceagent.exe: agent/ceagent.c | $(BIN)

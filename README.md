@@ -17,6 +17,8 @@ Emulator/build-navigon.sh           # one-time: download the VW package, build t
 Emulator/run-emulator.sh --navigon  # the full VW environment
 ```
 
+The [Devkit](Devkit/README.md) folder adds a Windows CE cross-compiler (CeGCC, Docker image or native), C and C++ samples, and a deploy agent so your own programs reach the emulator or a device with one command.
+
 The folder also documents what was needed to get there (hidden-flash pairing, loader and timer quirks, the software map renderer) and ships the tooling used: a mouse-driven VNC controller, an NMEA GPS feeder, a Windows CE API tracer on QEMU's gdbstub, PE patching and stub-DLL generators, and small in-guest test programs. See [Emulator/README.md](Emulator/README.md) for the details and the current limits (no vehicle data, Bluetooth or GL ES yet).
 
 ## Apps

@@ -48,6 +48,9 @@ Facts about the generated code that matter on this device:
   debug UART, `work/serial.log` in the emulator) or write a file.
 - MFC 8/9 and `MSVCR80.DLL` ship in Navigon's folders if you ever need them,
   but CeGCC code does not.
+- With GCC 9.3 use `-std=gnu++17`, not `-std=c++17`: strict ANSI mode hides
+  `atoll` from mingw's `stdlib.h` and `<cstdlib>` then fails to compile.
+- `logf` is a math.h builtin; do not name your own functions after it.
 
 ## Build
 
@@ -59,18 +62,23 @@ CEGCC=/opt/cegcc-arm make     # with a native toolchain
 
 ## Deploy and run
 
-In the emulator: `build-navigon.sh` copies `Devkit/bin/*.exe` into the
-`0emu` folder when they exist, with an `agent COM1:` shortcut. Double-click
-it once per boot (or `tools/vnc.py`), then everything is remote:
+In the emulator: `build-navigon.sh` copies `Devkit/bin/*.exe` to
+`\My Flash Disk\dev` and the `0emu` folder has a `0 agent COM1` shortcut as
+its first icon. Double-click it once per boot (or with `tools/vnc.py`), then
+everything is remote:
 
 ```sh
 Emulator/run-emulator.sh --navigon --headless &
-Emulator/tools/vnc.py 0emu dbl 38 211 3          # start "agent COM1:" (position varies, check a screenshot)
+sleep 85; Emulator/tools/vnc.py 0emu dbl 38 75 3  # start "0 agent COM1"
 python3 Devkit/deploy.py ping                     # -> ceagent 1
-python3 Devkit/deploy.py push bin/hello.exe "\My Flash Disk\dev" --run --wait 10
-python3 Devkit/deploy.py get "\My Flash Disk\dev\hello.txt" hello.txt
-grep EMUHELLO Emulator/work/serial.log
+python3 Devkit/deploy.py push bin/hello.exe "\My Flash Disk\dev2" --run --wait 10
+python3 Devkit/deploy.py get "\My Flash Disk\dev2\hello.txt" hello.txt
+grep -a -o "EMUHELLO[^P]*" Emulator/work/serial.log
 ```
+
+Verified here: `hello.exe` reports "Windows CE 7.0, cpu type 3087, 115 MB
+RAM" and writes its file; `hellocpp.exe` sorts, throws and catches, and its
+static destructor runs; a 74 KB push takes 1.6 s over the emulated UART.
 
 The agent uses `COM1:`, which run-emulator.sh exposes on `127.0.0.1:5555`.
 That is the same UART the GPS feeder (`tools/nmea.py`) uses, so pick one per

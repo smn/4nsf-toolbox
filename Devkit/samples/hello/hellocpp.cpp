@@ -1,11 +1,13 @@
 // C++ smoke test for the toolchain: libstdc++ containers and strings, a
 // static object with a destructor, and an exception caught in the same
 // module (SJLJ exceptions work inside one EXE/DLL, not across DLLs).
-#include <windows.h>
+// C++ headers before windows.h: CeGCC's windows.h drags in the C runtime
+// headers in a way that hides atoll from <cstdlib> otherwise.
 #include <string>
 #include <vector>
 #include <algorithm>
 #include <stdexcept>
+#include <windows.h>
 
 struct AtExit {
     ~AtExit() { OutputDebugStringW(L"EMUHELLO: static destructor ran"); }

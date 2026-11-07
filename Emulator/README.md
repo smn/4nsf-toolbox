@@ -52,14 +52,14 @@ To start a program in the guest use **Start > Run...** with a quoted path:
 ```
 
 In `--navigon` mode open `\My Flash Disk\0emu` in the Explorer window and
-double-click `launch-all.exe`: it starts `VwCommunicationExe`, `VwBrandDevice`
+double-click `launch-all.exe` (second row, fourth icon): it starts `VwCommunicationExe`, `VwBrandDevice`
 and `VwUserShell` with the device's command lines and the VW main menu
 appears after about a minute. Headless, the same with the mouse over VNC:
 
 ```sh
 pip install vncdotool pillow
 Emulator/tools/nmea.py --speed 30 --heading 45 &          # GPS receiver on COM1:
-Emulator/tools/vnc.py 0emu dbl 188 143 60 shot menu      # menu.png = the shell
+Emulator/tools/vnc.py 0emu dbl 263 143 60 shot menu      # menu.png = the shell
 Emulator/tools/vnc.py click 135 170 20 shot navigon      # Navigation tile
 ```
 

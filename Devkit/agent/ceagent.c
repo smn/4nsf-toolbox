@@ -44,7 +44,7 @@ static HANDLE g_com = INVALID_HANDLE_VALUE;
 static SOCKET g_sock = INVALID_SOCKET;
 
 /* ---- logging ---------------------------------------------------------- */
-static void logf(const wchar_t *fmt, ...)
+static void dbg(const wchar_t *fmt, ...)
 {
     wchar_t buf[256];
     va_list ap;
@@ -89,7 +89,7 @@ static int com_open(const wchar_t *name)
     COMMTIMEOUTS to;
     g_com = CreateFileW(name, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
     if (g_com == INVALID_HANDLE_VALUE) {
-        logf(L"CEAGENT: cannot open %s (%d)", name, GetLastError());
+        dbg(L"CEAGENT: cannot open %s (%d)", name, GetLastError());
         return 0;
     }
     memset(&dcb, 0, sizeof dcb);
@@ -167,7 +167,7 @@ static SOCKET tcp_listen(int port)
     struct sockaddr_in sa;
     SOCKET s;
     if (!ws2) {
-        logf(L"CEAGENT: no ws2.dll");
+        dbg(L"CEAGENT: no ws2.dll");
         return INVALID_SOCKET;
     }
     p_WSAStartup = (pfn_WSAStartup)GetProcAddressW(ws2, L"WSAStartup");
@@ -186,7 +186,7 @@ static SOCKET tcp_listen(int port)
     sa.sin_port = (unsigned short)(((port & 0xff) << 8) | ((port >> 8) & 0xff));
     sa.sin_addr.s_addr = 0; /* INADDR_ANY */
     if (p_bind(s, (struct sockaddr *)&sa, sizeof sa) != 0 || p_listen(s, 1) != 0) {
-        logf(L"CEAGENT: bind/listen failed");
+        dbg(L"CEAGENT: bind/listen failed");
         return INVALID_SOCKET;
     }
     return s;
@@ -245,11 +245,11 @@ static void cmd_put(transport_t *t, BYTE *p, DWORD len)
         CloseHandle(g_put);
     g_put = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (g_put == INVALID_HANDLE_VALUE) {
-        logf(L"CEAGENT: put %s failed (%d)", path, GetLastError());
+        dbg(L"CEAGENT: put %s failed (%d)", path, GetLastError());
         err(t, GetLastError());
         return;
     }
-    logf(L"CEAGENT: put %s", path);
+    dbg(L"CEAGENT: put %s", path);
     ok(t);
 }
 
@@ -316,7 +316,7 @@ static void cmd_run(transport_t *t, BYTE *p, DWORD len)
     }
     while (*args == L' ')
         args++;
-    logf(L"CEAGENT: run '%s' '%s'", app, args);
+    dbg(L"CEAGENT: run '%s' '%s'", app, args);
     if (!CreateProcessW(app, *args ? args : NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi)) {
         err(t, GetLastError());
         return;
@@ -385,7 +385,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR cmdline, int show)
 {
     transport_t t;
     const wchar_t *where = (cmdline && *cmdline) ? cmdline : L"COM1:";
-    logf(L"CEAGENT: starting on %s", where);
+    dbg(L"CEAGENT: starting on %s", where);
     if (where[0] == L't' && where[1] == L'c' && where[2] == L'p' && where[3] == L':') {
         int port = 0;
         const wchar_t *q = where + 4;
@@ -400,7 +400,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR cmdline, int show)
             g_sock = ((pfn_accept)GetProcAddressW(GetModuleHandleW(L"ws2.dll"), L"accept"))(ls, NULL, NULL);
             if (g_sock == INVALID_SOCKET)
                 break;
-            logf(L"CEAGENT: client connected");
+            dbg(L"CEAGENT: client connected");
             serve(&t);
             p_closesocket(g_sock);
         }
