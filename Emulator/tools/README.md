@@ -9,6 +9,7 @@ needed just to boot the VM.
 | `trace.gdb.py` | Windows CE API tracer on QEMU's gdbstub. It puts breakpoints on coredll exports (addresses from `coredll_exports.txt`, the export table of the image's coredll.dll) and on mmtimer, decodes the interesting arguments (file names, window classes, event names, timer ids) and logs one line per call with the caller's `lr`. See `trace.sh`. |
 | `trace.sh` | Starts the tracer against the VM from `run-emulator.sh --headless` (gdb on 127.0.0.1:1234). Attach it after the clicks that need exact timing: breakpoints slow the guest down. |
 | `disas.py` | Small capstone/pefile front end for the ARM CE binaries: `xref` (who references a wide string), `dis ADDR LEN [arm]`, `func ADDR` (whole function via `.pdata`), `imports`, `exports`. Resolves literal pools to strings and import names. |
+| `depcheck.py FLASH IMAGE_MODULES` | Static check of every EXE's import chain against the files next to it and the image's ROM: prints the DLLs nothing provides (this is how `ddraw.dll` turned up behind `openGL_ES_STA2065.dll`). |
 | `callers.py` | Builds a call graph of one binary once (cached as `*.calls.json`) and answers `callers ADDR` and `import NAME` (every call site of an imported function, through its thunk). This is how the hidden-flash layout and the shell's timer bug were found. |
 
 Example session that found why `VwUserShell.exe` died:

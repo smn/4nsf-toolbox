@@ -3,6 +3,10 @@
 
 Two sub-commands:
 
+  cestub.py exports FILE.dll
+      Print the export names of a DLL, e.g. to build a whole-DLL stub:
+      make-stub openGL_ES_STA2065.dll $(cestub.py exports openGL_ES_STA2065.dll)
+
   cestub.py make-stub OUT.dll NAME[=SPEC] [NAME[=SPEC] ...]
       Build a tiny ARM Windows CE DLL exporting each NAME. SPEC is a return
       value (default 0), "str:TEXT" / "wstr:TEXT" (copies TEXT as ANSI /
@@ -81,7 +85,7 @@ DELTA_INDEX = 3  # the .word; add r3,pc,r3 sits at word 1, so pc there = off+12
 
 
 def make_stub(out, names, base=0x10000):
-    """names: NAME, NAME=VALUE (return r0=VALUE), NAME=str:TEXT (copy TEXT+NUL
+    """names: NAME, NAME=VALUE (return r0=VALUE, any 32-bit value), NAME=str:TEXT (copy TEXT+NUL
     to the buffer in r0, return 1), NAME=blob:FILE (copy FILE[off:off+len] to
     buf for (buf, len, off), return len), NAME=blobw:FILE (the reverse: write
     into the blob, which is shared with blob:FILE of the same name)."""
@@ -124,7 +128,11 @@ def make_stub(out, names, base=0x10000):
             code += b"".join(struct.pack("<I", w) for w in tmpl)
         else:
             ret = int(v, 0) if v else 0
-            code += struct.pack("<II", 0xE3A00000 | (ret & 0xFF), 0xE12FFF1E)
+            if 0 <= ret <= 0xFF:
+                code += struct.pack("<II", 0xE3A00000 | ret, 0xE12FFF1E)   # mov r0,#v; bx lr
+            else:
+                # ldr r0,[pc,#0] reads the word two instructions ahead
+                code += struct.pack("<III", 0xE59F0000, 0xE12FFF1E, ret & 0xFFFFFFFF)
     blob_off = {}
     for key, data in blobs.items():
         while len(code) % 4:
@@ -281,6 +289,17 @@ class PE:
     def cstr(self, rva):
         o = self.r2o(rva)
         return self.d[o:self.d.index(b"\0", o)].decode()
+
+    def exports(self):
+        """Names in the export directory (for building a full stub of a DLL)."""
+        erva, esize = struct.unpack_from("<II", self.d, self.opt + 96)
+        if not erva:
+            return []
+        o = self.r2o(erva)
+        n_names = struct.unpack_from("<I", self.d, o + 24)[0]
+        addr_names = struct.unpack_from("<I", self.d, o + 32)[0]
+        no = self.r2o(addr_names)
+        return [self.cstr(struct.unpack_from("<I", self.d, no + 4 * i)[0]) for i in range(n_names)]
 
     def imports(self):
         irva, isize = struct.unpack_from("<II", self.d, self.opt + 104)
@@ -488,6 +507,9 @@ def main():
     cmd = sys.argv[1]
     if cmd == "make-stub":
         make_stub(sys.argv[2], sys.argv[3:])
+        return 0
+    if cmd == "exports":
+        print(" ".join(PE(sys.argv[2]).exports()))
         return 0
     if cmd == "patch":
         argv = sys.argv[2:]

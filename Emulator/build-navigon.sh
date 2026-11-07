@@ -78,10 +78,13 @@ if [ ! -f "$NAV/flash_shim/.done" ]; then
   printf '\1\1\144\0\377\377\377\377\377\377\377\377\0\1\144\0\377\377\377\377\377\377\377\377' > "$WORK/powerstatus.bin"
   (cd "$WORK" && python3 -I "$HERE/cestub.py" make-stub "$NAV/cestub.dll" GetSystemPowerStatusEx=fill:powerstatus.bin $syms)
   find "$NAV/flash_shim" -name '*.orig' -delete
-  # the stub and the device's \Windows DLLs next to every executable
+  # the stub and the device's \Windows DLLs next to every executable.
+  # cp -n: the package's own copy wins (BT\MAPBL.dll is newer than the ROM's,
+  # and flash_shim is hard-linked to flash, so a plain cp would overwrite the
+  # pristine tree through the link).
   for d in $(find "$NAV/flash_shim" -iname '*.exe' -not -path '*/0emu/*' -printf '%h\n' | sort -u) "$NAV/flash_shim"; do
     cp "$NAV/cestub.dll" "$d/"
-    cp "$NAV"/os/rom/files/*.[dD][lL][lL] "$NAV"/os/rom/files/*.ttf "$d/" 2>/dev/null || true
+    cp -n "$NAV"/os/rom/files/*.[dD][lL][lL] "$NAV"/os/rom/files/*.ttf "$d/" 2>/dev/null || true
   done
   cp "$HERE/emu_start.mscr" "$NAV/flash_shim/"
   touch "$NAV/flash_shim/.done"
@@ -125,7 +128,23 @@ echo ">> 6b2. optional: replace the whole hardware layer (HWL_STUB=1)"
 if [ "${HWL_STUB:-0}" = 1 ]; then
   python3 -I "$HERE/cestub.py" make-stub "$NAV/wolfstub/HWLHardwareLayer.dll" $(sed -n '/^HWL_STUB_EXPORTS=/,/^HWL_STUB_END/p' "$HERE/build-navigon.sh" | sed '1d;$d')
   for d in $(find "$NAV/flash_shim" -iname '*.exe' -printf '%h\n' | sort -u); do
-    [ -f "$d/HWLHardwareLayer.dll" ] && cp "$NAV/wolfstub/HWLHardwareLayer.dll" "$d/"
+    [ -f "$d/HWLHardwareLayer.dll" ] && cp --remove-destination "$NAV/wolfstub/HWLHardwareLayer.dll" "$d/"
+  done
+fi
+
+echo ">> 6b3. DirectDraw and GL ES"
+# navigon.exe needs openGL_ES_STA2065.dll (device ROM), which imports
+# DirectDrawCreate from a ddraw.dll the Compact 7 image does not have. A stub
+# that fails the call lets the DLL load. GL_STUB=1 replaces the GL ES DLL
+# itself (it drives the Cartesio SGA) with a stub of all its exports.
+python3 -I "$HERE/cestub.py" make-stub "$NAV/wolfstub/ddraw.dll" DirectDrawCreate=0x80004005
+for d in $(find "$NAV/flash_shim" -iname '*.exe' -not -path '*/0emu/*' -printf '%h\n' | sort -u); do
+  cp "$NAV/wolfstub/ddraw.dll" "$d/"
+done
+if [ "${GL_STUB:-0}" = 1 ]; then
+  python3 -I "$HERE/cestub.py" make-stub "$NAV/wolfstub/openGL_ES_STA2065.dll" $(python3 -I "$HERE/cestub.py" exports "$NAV/os/rom/files/openGL_ES_STA2065.dll")
+  for d in $(find "$NAV/flash_shim" -iname '*.exe' -not -path '*/0emu/*' -printf '%h\n' | sort -u); do
+    [ -f "$d/openGL_ES_STA2065.dll" ] && cp --remove-destination "$NAV/wolfstub/openGL_ES_STA2065.dll" "$d/"
   done
 fi
 
@@ -143,6 +162,10 @@ mklnk "4 navigon"  '"\My Flash Disk\NAVIGON\navigon.exe"'
 mklnk "5 script"   '"\My Flash Disk\MortScript.exe" "\My Flash Disk\emu_start.mscr"'
 mklnk "6 tc"       '"\My Flash Disk\Apps\TotalCommander\tc.exe"'
 mklnk "7 watchdog" '"\My Flash Disk\WatchdogPuppy.exe" Watchdog_HW.ini'
+mklnk "t1 load MAPBL" '"\My Flash Disk\0emu\loadtest.exe" "\My Flash Disk\BT\MAPBL.dll"'
+mklnk "t2 load SyncBL" '"\My Flash Disk\0emu\loadtest.exe" "\My Flash Disk\BT\SyncBL.dll"'
+mklnk "t3 load GLES"   '"\My Flash Disk\0emu\loadtest.exe" "\My Flash Disk\NAVIGON\openGL_ES_STA2065.dll"'
+mklnk "t4 load ddraw"  '"\My Flash Disk\0emu\loadtest.exe" ddraw.dll'
 cp "$HERE"/guest-tools/bin/*.exe "$NAV/flash_shim/0emu/"
 : > "$NAV/flash_shim/BrandDevice.reg"
 # The car's BAP link: the device uses COM9:, the second QEMU UART is COM1:

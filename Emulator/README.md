@@ -115,11 +115,18 @@ DLLs that the apps load at run time (`WolfSpecial.dll`, `nfVR.dll`,
   info submenu (Trip computer, Think Blue. Trainer, Status) opens, Phone
   starts `PhoneApplication.exe`, which draws its own UI ("no device
   connected") in German.
-- Not yet: `PhoneApplication` spawns `BTCore.exe`, which the loader rejects
-  with "Unable to import library MAPBL.dll" although every import of that
-  DLL resolves; the Navigation tile (`navigon.exe`) and Media are untested;
-  the Explorer taskbar still covers the bottom 26 pixels; nothing feeds
-  vehicle data, GPS or Bluetooth yet.
+- **Navigation starts Navigon MobileNavigator 7** (`screenshot-navigon-menu.png`):
+  the first-start wizard (language, units, time and date format, EULA) and
+  the main menu (New destination, My destinations, Take me home, Voice
+  command) work; the shell's status bar picks up its state over AppCom.
+  Phone starts `BTCore.exe` and asks to search for Bluetooth devices; Media
+  is started hidden by the shell (`MediaPlayer.exe -Mode=NOCONN`).
+- Not yet: the map itself (the GL ES DLL reports `G4M_InitMemory: Error`
+  without the Cartesio accelerator; `GL_STUB=1` swaps it for a stub of all
+  190 exports), the Explorer taskbar still covers the bottom 26 pixels, and
+  nothing feeds vehicle data, GPS or Bluetooth yet.
+
+![Navigon main menu](screenshot-navigon-menu.png)
 
 ### What it took
 
@@ -152,6 +159,18 @@ DLLs that the apps load at run time (`WolfSpecial.dll`, `nfVR.dll`,
 4. **Splash.** After pairing the brand app runs `SplashAnimation.exe`, which
    needs the Cartesio graphics accelerator (`sgalib.dll`, SGA ioctls); it is
    renamed away on the emulator disk.
+5. **DirectDraw.** `navigon.exe` imports `openGL_ES_STA2065.dll` from the
+   device ROM, which imports `DirectDrawCreate` from a `ddraw.dll` the Compact
+   7 image does not have (`tools/depcheck.py` finds such gaps statically). A
+   stub `ddraw.dll` whose `DirectDrawCreate` fails is enough for the DLL to
+   load and the application to run.
+6. **A self-inflicted one.** `BTCore.exe` failed with "Unable to import
+   library MAPBL.dll": the package ships a newer `BT\MAPBL.dll` than the ROM,
+   and the build script's copy of ROM DLLs next to each executable had
+   overwritten it through the hard link into the pristine tree. The copy is
+   `cp -n` now and the extracted tree is re-verified against `content.md5`.
+   `guest-tools/loadtest.exe` (LoadLibrary + GetLastError from inside the
+   guest) is what showed the DLL itself loads fine.
 
 Verified not to matter (tests in `guest-tools/`): TCP/IP and the legacy
 `WINSOCK.dll`, multimedia timers once initialised, GDI DIB blits, the whole
@@ -161,13 +180,12 @@ they are stored pre-relocated without fixups.
 
 ## Next steps
 
-1. **Bluetooth.** Find out why the loader rejects `MAPBL.dll` for
-   `BTCore.exe` (a `LoadLibrary` test program in `guest-tools/` with
-   `GetLastError` is the quickest check; the DLL depends on `MFC80U.DLL` and
-   `MSVCR80.DLL` from the same folder).
-2. **Navigation.** Start `navigon.exe` from the shell and from `0emu`; it
-   needs the GL ES / `nfVR` ROM DLLs that are already copied, and GPS: feed
-   NMEA from `gpsfake` into a third QEMU UART once it is up.
+1. **Map rendering.** Navigon draws the map through GL ES on the Cartesio
+   SGA. Options: a software GL ES 1.x for CE ARM behind the same 190 exports
+   (the stub shows which calls the map needs), or Navigon's own 2D fallback
+   if it has one (it keeps running with GL init failed).
+2. **GPS.** Feed NMEA from `gpsfake` into a third QEMU UART and point
+   Navigon's GPS settings at it.
 3. **Vehicle data.** `VwCommunicationExe` now talks to `COM1:` (QEMU's second
    UART on `127.0.0.1:5555`). Feeding BAP frames there, or writing into the
    `VwSharedMemoryFileMapping` the shell reads (mutexes
