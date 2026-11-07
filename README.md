@@ -7,7 +7,17 @@ This repository is there to add some extra flair to your GarminNavigon device, b
 
 ## Emulator
 
-Want to try Windows CE apps without a device? The [Emulator](Emulator/README.md) folder boots a Windows Embedded Compact 7 ARM virtual machine in QEMU with the `Apps` folder attached as a disk. It also explains why the device's own firmware (ST Cartesio STA2064 SoC) cannot be booted in QEMU as-is.
+Want to try the device's software, or your own, without a device? The [Emulator](Emulator/README.md) folder boots a Windows Embedded Compact ARM virtual machine in QEMU and can load the complete VW "maps + more" software into it from Volkswagen's own update package: the VW shell, Navigon MobileNavigator with a working map and an emulated GPS receiver, and the phone app. Nothing from the device or the package is committed; the scripts rebuild everything.
+
+![Navigon running in QEMU](Emulator/screenshot-navigon-map.png)
+
+```sh
+Emulator/run-emulator.sh            # generic CE VM with the Apps folder attached
+Emulator/build-navigon.sh           # one-time: download the VW package, build the disk
+Emulator/run-emulator.sh --navigon  # the full VW environment
+```
+
+The folder also documents what was needed to get there (hidden-flash pairing, loader and timer quirks, the software map renderer) and ships the tooling used: a mouse-driven VNC controller, an NMEA GPS feeder, a Windows CE API tracer on QEMU's gdbstub, PE patching and stub-DLL generators, and small in-guest test programs. See [Emulator/README.md](Emulator/README.md) for the details and the current limits (no vehicle data, Bluetooth or GL ES yet).
 
 ## Apps
 
