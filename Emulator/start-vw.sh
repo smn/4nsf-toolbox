@@ -48,6 +48,9 @@ if pgrep -f "qemu-system-arm.*navigon-disk" >/dev/null; then
 fi
 rm -f "$WORK/serial.log"
 if [ -n "$resume" ]; then
+  if [ -z "${QEMU:-}" ] && [ ! -x "$WORK/qemu/qemu-system-arm" ]; then
+    echo ">> note: stock QEMU cannot restore snapshots of this image; run build-qemu.sh first" >&2
+  fi
   echo ">> resuming snapshot '$resume'"
   nohup "$HERE/run-emulator.sh" --navigon --headless --loadvm "$resume" > "$WORK/qemu.out" 2>&1 &
   sleep 4

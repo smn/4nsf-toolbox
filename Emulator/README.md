@@ -105,6 +105,7 @@ the back. The emulator never flashes anything, it only unpacks files.
 | `mkflash.py` | Writes the emulated 2 KB hidden flash: validity signature, brand, "paired" flag and VIN in the layout the VW apps read (documented in the file). `VIN=... build-navigon.sh` sets your own VIN |
 | `tools/` | Host-side debugging: mouse-driven VNC control, a Windows CE API tracer on QEMU's gdbstub, and disassembly/call-graph helpers for the ARM binaries (see `tools/README.md`) |
 | `mkdisk.py` | MBR + FAT32 disk image from folders, using mtools |
+| `build-qemu.sh` | Builds the patched `qemu-system-arm` that can restore VM snapshots of this image |
 | `start-vw.sh` | Boot headless, run `launch-all`, wait for the shell and the deploy agent; `--gps` starts the NMEA feeder, `--save NAME` saves a VM snapshot, `--resume NAME` restores one (see "VM snapshots") |
 | `emu_start.mscr` | MortScript for the guest: registry setup from the device's `autorunce.mscr`, then the application chain from `Watchdog_HW.ini`. MortScript itself runs in the VM, but this script has not yet been seen to start the chain; the three Run commands below are the verified route |
 
@@ -250,11 +251,11 @@ The boot plus application start takes about two minutes. `start-vw.sh
 --resume vw` brings it back in a few seconds with the shell and the agent
 already running. Restoring needs a QEMU with the one-line fix in
 `qemu-virtio-loadvm.patch` (stock 8.2 rejects the image's virtio queues on
-load because its drivers never acknowledge `VIRTIO_F_VERSION_1`); build
-`qemu-system-arm` from source with it and put the binary in
-`work/qemu/`, or set `QEMU=/path/to/qemu-system-arm`. Snapshots are tied to
-the overlay, which `build-navigon.sh` recreates whenever the raw disk is
-rebuilt.
+load because its drivers never acknowledge `VIRTIO_F_VERSION_1`);
+`build-qemu.sh` clones QEMU 8.2.2, applies it and builds `arm-softmmu` into
+`work/qemu/` (about 20 minutes), which `run-emulator.sh` then prefers; or
+set `QEMU=/path/to/qemu-system-arm`. Snapshots are tied to the overlay,
+which `build-navigon.sh` recreates whenever the raw disk is rebuilt.
 
 ## Files that stay out of git
 
