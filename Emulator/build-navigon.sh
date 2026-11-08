@@ -167,6 +167,12 @@ mklnk "t2 load SyncBL" '"\My Flash Disk\0emu\loadtest.exe" "\My Flash Disk\BT\Sy
 mklnk "t3 load GLES"   '"\My Flash Disk\0emu\loadtest.exe" "\My Flash Disk\NAVIGON\openGL_ES_STA2065.dll"'
 mklnk "t4 load ddraw"  '"\My Flash Disk\0emu\loadtest.exe" ddraw.dll'
 cp "$HERE"/guest-tools/bin/*.exe "$NAV/flash_shim/0emu/"
+# programs built with the Devkit (CeGCC) go to \My Flash Disk\dev; the
+# deploy agent has the first shortcut in 0emu (always created, so the icon
+# positions the docs quote do not move: agent 38,75 / launch-all 263,143)
+mkdir -p "$NAV/flash_shim/dev"
+ls "$HERE"/../Devkit/bin/*.exe >/dev/null 2>&1 && cp "$HERE"/../Devkit/bin/*.exe "$HERE"/../Devkit/bin/*.dll "$NAV/flash_shim/dev/"
+mklnk "0 agent COM1" '"\My Flash Disk\dev\ceagent.exe" COM1:'
 : > "$NAV/flash_shim/BrandDevice.reg"
 # GPS: the device's receiver is on COM2:; the image has exactly one pl011
 # serial port, COM1: = QEMU's second UART, which run-emulator.sh exposes on
@@ -200,6 +206,14 @@ if [ ! -f "$WORK/navigon-disk.img" ]; then
   cp -r "$HERE/../Apps/." "$NAV/stage/Apps/"
   python3 -I "$HERE/mkdisk.py" "$WORK/navigon-disk.img.part" "$DISK_MB" "$NAV"/stage/* | tail -2
   mv "$WORK/navigon-disk.img.part" "$WORK/navigon-disk.img"
+fi
+# qcow2 overlay on top of the raw disk: the guest's writes and VM snapshots
+# (start-vw.sh --save) go there, the raw image stays as built. Recreated
+# whenever the raw image is newer.
+if command -v qemu-img >/dev/null && { [ ! -f "$WORK/navigon-disk.qcow2" ] || [ "$WORK/navigon-disk.img" -nt "$WORK/navigon-disk.qcow2" ]; }; then
+  rm -f "$WORK/navigon-disk.qcow2"
+  qemu-img create -q -f qcow2 -b "$WORK/navigon-disk.img" -F raw "$WORK/navigon-disk.qcow2"
+  echo "overlay: $WORK/navigon-disk.qcow2"
 fi
 
 echo "done. Boot with: $HERE/run-emulator.sh --navigon"

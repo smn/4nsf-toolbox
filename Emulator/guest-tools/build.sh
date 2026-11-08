@@ -6,7 +6,10 @@ PY=${PYTHON:-python3}
 COM='\My Flash Disk\VwUserShell\VwCommunicationExe.exe|'
 BRAND='\My Flash Disk\VwBrandDevice\VwBrandDevice.exe|'
 SHELL_='\My Flash Disk\VwUserShell\VwUserShell.exe|-ShowWindow=1'
-$PY mklaunch.py bin/launch-all.exe   hidetaskbar "$COM" "$BRAND" "$SHELL_"
+PORTS='\My Flash Disk\dev\addport.exe|'
+AGENT='\My Flash Disk\dev\ceagent.exe|COM2:'
+# addport + agent fail silently when the Devkit binaries are not on the disk
+$PY mklaunch.py bin/launch-all.exe   hidetaskbar "$PORTS" "$AGENT" "$COM" "$BRAND" "$SHELL_"
 $PY mklaunch.py bin/launch-brand.exe hidetaskbar "$BRAND"
 $PY mklaunch.py bin/launch-shell.exe hidetaskbar "$SHELL_"
 $PY mkloadtest.py bin/loadtest.exe

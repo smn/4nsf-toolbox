@@ -5,7 +5,7 @@ needed just to boot the VM.
 
 | Tool | Purpose |
 |---|---|
-| `vnc.py` | Mouse-drives the headless VM over VNC: `vnc.py 0emu dbl 188 143 40 shot menu` opens the `0emu` folder, double-clicks `launch-all.exe` and saves `menu.png`. Keyboard input through VNC doubles characters in this guest, so everything is clicks plus screenshot checks (`ref/*.png` are the Explorer address-bar crops it compares against). `pip install vncdotool pillow`. |
+| `vnc.py` | Mouse-drives the headless VM over VNC: `vnc.py 0emu dbl 263 143 40 shot menu` opens the `0emu` folder, double-clicks `launch-all.exe` and saves `menu.png`. Keyboard input through VNC doubles characters in this guest, so everything is clicks plus screenshot checks (`ref/*.png` are the Explorer address-bar crops it compares against). `pip install vncdotool pillow`. |
 | `nmea.py` | GPS receiver for the VM: sends NMEA (GGA, RMC, GSA, GSV, VTG) at 1 Hz into QEMU's second UART on 127.0.0.1:5555, which the guest sees as `COM1:` and Navigon is configured to read. `--lat/--lon/--speed/--heading` move the car. |
 | `trace.gdb.py` | Windows CE API tracer on QEMU's gdbstub. It puts breakpoints on coredll exports (addresses from `coredll_exports.txt`, the export table of the image's coredll.dll) and on mmtimer, decodes the interesting arguments (file names, window classes, event names, timer ids) and logs one line per call with the caller's `lr`. See `trace.sh`. |
 | `trace.sh` | Starts the tracer against the VM from `run-emulator.sh --headless` (gdb on 127.0.0.1:1234). Attach it after the clicks that need exact timing: breakpoints slow the guest down. |
@@ -17,10 +17,10 @@ Example session that found why `VwUserShell.exe` died:
 
 ```sh
 Emulator/run-emulator.sh --navigon --headless &
-sleep 90; Emulator/tools/vnc.py 0emu dbl 38 75 5     # start VwCommunicationExe
-Emulator/tools/vnc.py dbl 113 75 20                  # VwBrandDevice (exits when paired)
+sleep 90; Emulator/tools/vnc.py 0emu dbl 113 75 5    # start VwCommunicationExe ("1 com")
+Emulator/tools/vnc.py dbl 188 75 20                  # VwBrandDevice (exits when paired)
 Emulator/tools/trace.sh work/shell.log &             # attach the tracer
-Emulator/tools/vnc.py dbl 188 75 60 shot shell       # VwUserShell -ShowWindow=1
+Emulator/tools/vnc.py dbl 263 75 60 shot shell       # VwUserShell -ShowWindow=1
 grep -n timeKillEvent work/shell.log                  # id=4978548 from lr=0x17d9b0
 Emulator/tools/callers.py work/navigon/flash/VwUserShell/VwUserShell.exe import timeKillEvent
 Emulator/tools/disas.py work/navigon/flash/VwUserShell/VwUserShell.exe func 0x17d9e8

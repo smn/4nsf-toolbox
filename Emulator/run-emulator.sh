@@ -9,6 +9,8 @@
 #   --navigon        boot the patched image with work/navigon-disk.img, the full
 #                    VW/Navigon flash tree built by build-navigon.sh
 #   --image FILE / --disk FILE   use another flat kernel image / disk image
+#   --loadvm NAME    resume a VM snapshot saved with start-vw.sh --save NAME
+#                    (needs the qcow2 overlay disk that build-navigon.sh makes)
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,15 +23,17 @@ LOAD_ADDR=0x80000000
 ENTRY_ADDR=0x800010c0
 DISK_MB="${DISK_MB:-256}"
 
-headless=0 rebuild=0 image="" disk=""
+headless=0 rebuild=0 image="" disk="" loadvm=""
 extra=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --headless) headless=1 ;;
     --rebuild-disk) rebuild=1 ;;
-    --navigon) image="$WORK/NK.flashdisk.raw"; disk="$WORK/navigon-disk.img" ;;
+    --navigon) image="$WORK/NK.flashdisk.raw"; disk="$WORK/navigon-disk.img"
+               [ -f "$WORK/navigon-disk.qcow2" ] && disk="$WORK/navigon-disk.qcow2" ;;
     --image) image="$2"; shift ;;
     --disk) disk="$2"; shift ;;
+    --loadvm) loadvm="$2"; shift ;;
     *) extra+=("$1") ;;
   esac
   shift
@@ -65,17 +69,32 @@ if [ "$headless" = 1 ]; then
   display=(-display none -vnc 127.0.0.1:1 -monitor "unix:$WORK/mon.sock,server,nowait")
   echo ">> headless: VNC 127.0.0.1:5901, monitor $WORK/mon.sock, serial log $WORK/serial.log"
 fi
-# gdbstub for tools/trace.sh; the second UART (COM1: in the guest, Navigon's
-# GPS port, fed by tools/nmea.py) as a TCP server on 127.0.0.1:5555.
-extra+=(-gdb tcp:127.0.0.1:1234 -serial tcp:127.0.0.1:5555,server,nowait)
+# gdbstub for tools/trace.sh. UARTs 1-3 as TCP servers: COM1: on 5555 is
+# Navigon's GPS port (tools/nmea.py); COM2: on 5556 and COM3: on 5557 exist
+# once the Devkit's addport.exe has loaded its polled driver in the guest
+# (launch-all.exe does that); COM2: carries the deploy agent.
+extra+=(-gdb tcp:127.0.0.1:1234 -serial tcp:127.0.0.1:5555,server,nowait
+        -serial tcp:127.0.0.1:5556,server,nowait -serial tcp:127.0.0.1:5557,server,nowait)
 
-exec qemu-system-arm \
+# a qcow2 overlay (writes and VM snapshots) over the raw image, or the raw image
+case "$disk" in
+  *.qcow2) blockdev=(-blockdev "driver=file,filename=$disk,node-name=f0" -blockdev "driver=qcow2,file=f0,node-name=d0") ;;
+  *)       blockdev=(-blockdev "driver=file,filename=$disk,node-name=d0") ;;
+esac
+[ -n "$loadvm" ] && extra+=(-loadvm "$loadvm")
+
+# a patched QEMU (see README, "VM snapshots") is preferred when present
+QEMU="${QEMU:-}"
+[ -z "$QEMU" ] && [ -x "$WORK/qemu/qemu-system-arm" ] && QEMU="$WORK/qemu/qemu-system-arm" && extra+=(-L "$WORK/qemu/share")
+QEMU="${QEMU:-qemu-system-arm}"
+
+exec "$QEMU" \
   -global virtio-mmio.force-legacy=false \
-  -machine type=vexpress-a15 -m 256 \
+  -machine type=vexpress-a15,secure=off,virtualization=off -m 256 \
   -device "loader,addr=$LOAD_ADDR,file=$image" \
   -device "loader,addr=$ENTRY_ADDR,cpu-num=0" \
   -device virtio-tablet-device \
-  -blockdev "driver=file,filename=$disk,node-name=d0" -device virtio-blk-device,drive=d0 \
+  "${blockdev[@]}" -device virtio-blk-device,drive=d0 \
   -serial "file:$WORK/serial.log" \
   -audio none \
   "${display[@]}" "${extra[@]}"

@@ -51,15 +51,24 @@ To start a program in the guest use **Start > Run...** with a quoted path:
 "\My Flash Disk\MortScript.exe" "\My Flash Disk\emu_start.mscr"
 ```
 
-In `--navigon` mode open `\My Flash Disk\0emu` in the Explorer window and
-double-click `launch-all.exe`: it starts `VwCommunicationExe`, `VwBrandDevice`
+In `--navigon` mode the one-command way is
+
+```sh
+pip install vncdotool pillow            # once, for the mouse automation
+Emulator/start-vw.sh --gps               # boot, start everything, GPS feed on
+```
+
+which boots headless, double-clicks `launch-all.exe` for you and waits
+until the VW shell and the Devkit's deploy agent are up (VNC on
+127.0.0.1:5901). By hand: open `\My Flash Disk\0emu` in the Explorer
+window and double-click `launch-all.exe` (second row, fourth icon): it starts `VwCommunicationExe`, `VwBrandDevice`
 and `VwUserShell` with the device's command lines and the VW main menu
 appears after about a minute. Headless, the same with the mouse over VNC:
 
 ```sh
 pip install vncdotool pillow
 Emulator/tools/nmea.py --speed 30 --heading 45 &          # GPS receiver on COM1:
-Emulator/tools/vnc.py 0emu dbl 188 143 60 shot menu      # menu.png = the shell
+Emulator/tools/vnc.py 0emu dbl 263 143 60 shot menu      # menu.png = the shell
 Emulator/tools/vnc.py click 135 170 20 shot navigon      # Navigation tile
 ```
 
@@ -96,6 +105,8 @@ the back. The emulator never flashes anything, it only unpacks files.
 | `mkflash.py` | Writes the emulated 2 KB hidden flash: validity signature, brand, "paired" flag and VIN in the layout the VW apps read (documented in the file). `VIN=... build-navigon.sh` sets your own VIN |
 | `tools/` | Host-side debugging: mouse-driven VNC control, a Windows CE API tracer on QEMU's gdbstub, and disassembly/call-graph helpers for the ARM binaries (see `tools/README.md`) |
 | `mkdisk.py` | MBR + FAT32 disk image from folders, using mtools |
+| `build-qemu.sh` | Builds the patched `qemu-system-arm` that can restore VM snapshots of this image |
+| `start-vw.sh` | Boot headless, run `launch-all`, wait for the shell and the deploy agent; `--gps` starts the NMEA feeder, `--save NAME` saves a VM snapshot, `--resume NAME` restores one (see "VM snapshots") |
 | `emu_start.mscr` | MortScript for the guest: registry setup from the device's `autorunce.mscr`, then the application chain from `Watchdog_HW.ini`. MortScript itself runs in the VM, but this script has not yet been seen to start the chain; the three Run commands below are the verified route |
 
 `cestub.py patch` found only 16 coredll functions (RAS and TAPI used by
@@ -222,6 +233,46 @@ they are stored pre-relocated without fixups.
 5. **Hidden flash of a real unit.** Dump it through `WolfSpecial.dll`
    `ReadHiddenFlash` on the device into `work/hidden_flash.bin` so brand, VIN
    and serial are genuine (maps are keyed to the device serial).
+
+## Serial ports
+
+QEMU's vexpress board has four UARTs; the image registers UART1 as `COM1:`.
+`run-emulator.sh` puts UART1..3 on TCP 127.0.0.1:5555/5556/5557, and the
+Devkit's `addport.exe` (run by `launch-all`) adds `COM2:` and `COM3:` with a
+small polled PL011 driver built from `Devkit/drivers/pl011poll`. Current
+use: `COM1:` GPS (`tools/nmea.py`), `COM2:` the deploy agent
+(`Devkit/deploy.py`), `COM3:` free (for the car's BAP link, for example).
+
+## VM snapshots
+
+Optional. Everything else in this folder works with the distribution's
+QEMU (8.2 on Ubuntu 24.04); only *restoring* a saved VM snapshot needs the
+patched build described here, and without it `start-vw.sh --resume` fails
+with "Failed to load virtio-blk:virtio" while a cold `start-vw.sh` still
+takes about a minute.
+
+The boot plus application start takes about a minute. `start-vw.sh
+--save vw` saves the running VM into the qcow2 overlay disk that
+`build-navigon.sh` creates on top of the raw image, and `start-vw.sh
+--resume vw` brings it back in a few seconds with the shell and the agent
+already running. Restoring needs a QEMU with the one-line fix in
+`qemu-virtio-loadvm.patch` (stock 8.2 rejects the image's virtio queues on
+load because its drivers never acknowledge `VIRTIO_F_VERSION_1`);
+`build-qemu.sh` clones QEMU 8.2.2, applies it and builds `arm-softmmu` into
+`work/qemu/` (about 20 minutes), which `run-emulator.sh` then prefers; or
+set `QEMU=/path/to/qemu-system-arm`. Snapshots are tied to the overlay,
+which `build-navigon.sh` recreates whenever the raw disk is rebuilt.
+
+A second quirk needs no patch but explains two machine flags:
+`run-emulator.sh` starts the board with `secure=off,virtualization=off`.
+With the default (EL3 present) the CE kernel runs in secure state and QEMU
+8.2 does not migrate the secure-bank copies of `TTBR1`, `DACR` and
+`CONTEXTIDR`, so a restored guest loses its kernel page-table base and
+dies in an abort loop at the vector page. Without EL3 and EL2 the kernel
+runs in plain supervisor mode, those registers are the ones QEMU
+migrates, and a restore comes back exactly where it was (measured: 4 s to
+a running shell with the agent answering). The flags change nothing for a
+normal boot.
 
 ## Files that stay out of git
 
