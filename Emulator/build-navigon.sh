@@ -171,7 +171,7 @@ cp "$HERE"/guest-tools/bin/*.exe "$NAV/flash_shim/0emu/"
 # deploy agent has the first shortcut in 0emu (always created, so the icon
 # positions the docs quote do not move: agent 38,75 / launch-all 263,143)
 mkdir -p "$NAV/flash_shim/dev"
-ls "$HERE"/../Devkit/bin/*.exe >/dev/null 2>&1 && cp "$HERE"/../Devkit/bin/*.exe "$NAV/flash_shim/dev/"
+ls "$HERE"/../Devkit/bin/*.exe >/dev/null 2>&1 && cp "$HERE"/../Devkit/bin/*.exe "$HERE"/../Devkit/bin/*.dll "$NAV/flash_shim/dev/"
 mklnk "0 agent COM1" '"\My Flash Disk\dev\ceagent.exe" COM1:'
 : > "$NAV/flash_shim/BrandDevice.reg"
 # GPS: the device's receiver is on COM2:; the image has exactly one pl011

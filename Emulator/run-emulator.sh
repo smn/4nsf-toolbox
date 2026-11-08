@@ -65,9 +65,12 @@ if [ "$headless" = 1 ]; then
   display=(-display none -vnc 127.0.0.1:1 -monitor "unix:$WORK/mon.sock,server,nowait")
   echo ">> headless: VNC 127.0.0.1:5901, monitor $WORK/mon.sock, serial log $WORK/serial.log"
 fi
-# gdbstub for tools/trace.sh; the second UART (COM1: in the guest, Navigon's
-# GPS port, fed by tools/nmea.py) as a TCP server on 127.0.0.1:5555.
-extra+=(-gdb tcp:127.0.0.1:1234 -serial tcp:127.0.0.1:5555,server,nowait)
+# gdbstub for tools/trace.sh. UARTs 1-3 as TCP servers: COM1: on 5555 is
+# Navigon's GPS port (tools/nmea.py); COM2: on 5556 and COM3: on 5557 exist
+# once the Devkit's addport.exe has loaded its polled driver in the guest
+# (launch-all.exe does that); COM2: carries the deploy agent.
+extra+=(-gdb tcp:127.0.0.1:1234 -serial tcp:127.0.0.1:5555,server,nowait
+        -serial tcp:127.0.0.1:5556,server,nowait -serial tcp:127.0.0.1:5557,server,nowait)
 
 exec qemu-system-arm \
   -global virtio-mmio.force-legacy=false \

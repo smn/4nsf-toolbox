@@ -18,7 +18,7 @@ CFLAGS := -O2 -Wall -D_WIN32_WCE=0x600 -DUNICODE -D_UNICODE
 LDFLAGS := -static -Wl,--image-base,0x10000
 BIN    := bin
 
-all: hello hellocpp agent
+all: hello hellocpp agent ports
 
 hello: $(BIN)/hello.exe
 hellocpp: $(BIN)/hellocpp.exe
@@ -39,6 +39,17 @@ $(BIN)/ceagent.exe: agent/ceagent.c | $(BIN)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 	$(STRIP) $@
 
+# extra serial ports for the emulator: polled PL011 driver + registration tool
+ports: $(BIN)/pl011poll.dll $(BIN)/addport.exe
+
+$(BIN)/pl011poll.dll: drivers/pl011poll/pl011poll.c | $(BIN)
+	$(CC) $(CFLAGS) -shared -static -o $@ $<
+	$(STRIP) $@
+
+$(BIN)/addport.exe: drivers/pl011poll/addport.c | $(BIN)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
+	$(STRIP) $@
+
 # push everything to \My Flash Disk\dev in the emulator and run hello
 deploy: all
 	python3 deploy.py push $(BIN)/hello.exe $(BIN)/hellocpp.exe "\\My Flash Disk\\dev" --run --wait 10
@@ -46,4 +57,4 @@ deploy: all
 clean:
 	rm -rf $(BIN)
 
-.PHONY: all hello hellocpp agent deploy clean
+.PHONY: all hello hellocpp agent ports deploy clean

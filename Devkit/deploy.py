@@ -2,9 +2,10 @@
 """Host side of ceagent: copy files to and from a Windows CE device or the
 emulator, list directories and run programs.
 
-The agent speaks over a serial port or TCP. In the emulator its COM1: is
-QEMU's second UART, exposed by run-emulator.sh on 127.0.0.1:5555, so the
-default target is that socket. On a real device use a USB-serial adapter on
+The agent speaks over a serial port or TCP. In the emulator launch-all.exe
+starts it on COM2: (a UART added by addport.exe), which run-emulator.sh
+exposes on 127.0.0.1:5556, so the default target is that socket; the
+"0 agent COM1" shortcut puts it on COM1: / port 5555 instead (--port 5555). On a real device use a USB-serial adapter on
 the debug UART (--serial /dev/ttyUSB0) or, once networking exists, --host.
 
   deploy.py ping
@@ -124,7 +125,7 @@ def remote_join(folder, name):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--port", type=int, default=5555)
+    ap.add_argument("--port", type=int, default=5556)
     ap.add_argument("--serial", help="serial device instead of TCP, e.g. /dev/ttyUSB0")
     ap.add_argument("--baud", type=int, default=115200)
     ap.add_argument("--timeout", type=float, default=30)
