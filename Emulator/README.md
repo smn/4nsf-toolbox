@@ -263,6 +263,17 @@ load because its drivers never acknowledge `VIRTIO_F_VERSION_1`);
 set `QEMU=/path/to/qemu-system-arm`. Snapshots are tied to the overlay,
 which `build-navigon.sh` recreates whenever the raw disk is rebuilt.
 
+A second quirk needs no patch but explains two machine flags:
+`run-emulator.sh` starts the board with `secure=off,virtualization=off`.
+With the default (EL3 present) the CE kernel runs in secure state and QEMU
+8.2 does not migrate the secure-bank copies of `TTBR1`, `DACR` and
+`CONTEXTIDR`, so a restored guest loses its kernel page-table base and
+dies in an abort loop at the vector page. Without EL3 and EL2 the kernel
+runs in plain supervisor mode, those registers are the ones QEMU
+migrates, and a restore comes back exactly where it was (measured: 4 s to
+a running shell with the agent answering). The flags change nothing for a
+normal boot.
+
 ## Files that stay out of git
 
 `Emulator/work/` is ignored. It holds the Compact 7 image, the VW package,

@@ -34,6 +34,7 @@ echo ">> building (log: $WORK/qemu-build.log)"
 ninja -C build -j"$(nproc)" qemu-system-arm > "$WORK/qemu-build.log" 2>&1 || { tail -20 "$WORK/qemu-build.log"; exit 1; }
 mkdir -p "$WORK/qemu"
 cp build/qemu-system-arm "$WORK/qemu/"
-# the binary looks for its data (keymaps, BIOS blobs) relative to itself or in the build dir
-ln -sfn "$SRC/build/pc-bios" "$WORK/qemu/pc-bios" 2>/dev/null || true
+# data files (VNC keymaps etc.); run-emulator.sh passes this directory with -L
+rm -rf "$WORK/qemu/share"; mkdir -p "$WORK/qemu/share"
+cp -r pc-bios/keymaps "$WORK/qemu/share/"
 echo "done: $WORK/qemu/qemu-system-arm ($("$WORK/qemu/qemu-system-arm" --version | head -1))"

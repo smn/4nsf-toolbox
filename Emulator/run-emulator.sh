@@ -85,12 +85,12 @@ esac
 
 # a patched QEMU (see README, "VM snapshots") is preferred when present
 QEMU="${QEMU:-}"
-[ -z "$QEMU" ] && [ -x "$WORK/qemu/qemu-system-arm" ] && QEMU="$WORK/qemu/qemu-system-arm"
+[ -z "$QEMU" ] && [ -x "$WORK/qemu/qemu-system-arm" ] && QEMU="$WORK/qemu/qemu-system-arm" && extra+=(-L "$WORK/qemu/share")
 QEMU="${QEMU:-qemu-system-arm}"
 
 exec "$QEMU" \
   -global virtio-mmio.force-legacy=false \
-  -machine type=vexpress-a15 -m 256 \
+  -machine type=vexpress-a15,secure=off,virtualization=off -m 256 \
   -device "loader,addr=$LOAD_ADDR,file=$image" \
   -device "loader,addr=$ENTRY_ADDR,cpu-num=0" \
   -device virtio-tablet-device \
