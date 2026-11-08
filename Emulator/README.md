@@ -245,7 +245,13 @@ use: `COM1:` GPS (`tools/nmea.py`), `COM2:` the deploy agent
 
 ## VM snapshots
 
-The boot plus application start takes about two minutes. `start-vw.sh
+Optional. Everything else in this folder works with the distribution's
+QEMU (8.2 on Ubuntu 24.04); only *restoring* a saved VM snapshot needs the
+patched build described here, and without it `start-vw.sh --resume` fails
+with "Failed to load virtio-blk:virtio" while a cold `start-vw.sh` still
+takes about a minute.
+
+The boot plus application start takes about a minute. `start-vw.sh
 --save vw` saves the running VM into the qcow2 overlay disk that
 `build-navigon.sh` creates on top of the raw image, and `start-vw.sh
 --resume vw` brings it back in a few seconds with the shell and the agent
