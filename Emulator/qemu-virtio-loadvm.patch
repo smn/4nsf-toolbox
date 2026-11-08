@@ -1,0 +1,34 @@
+VM snapshots (savevm/loadvm) of the Compact 7 image fail on stock QEMU 8.2
+with
+
+  VQ 0 size 0x100 < last_avail_idx 0x41ad - used_idx 0x0
+  Failed to load virtio-blk:virtio
+
+The image's virtio-mmio drivers use the modern register layout (hence
+-global virtio-mmio.force-legacy=false) but only negotiate the low 32
+feature bits, so VIRTIO_F_VERSION_1 is never acknowledged. On loadvm QEMU
+then treats the queues as legacy and recomputes the avail/used ring
+addresses from the descriptor address, although the real addresses were
+migrated (the virtqueues subsection is written whenever the *host* offers
+VERSION_1). Trusting the migrated addresses in that case fixes it.
+
+Apply to QEMU 8.2 (hw/virtio/virtio.c, virtio_load()), build arm-softmmu
+and put the binary at Emulator/work/qemu/qemu-system-arm (or set QEMU=...);
+run-emulator.sh picks it up. Then start-vw.sh --save vw / --resume vw work.
+
+--- a/hw/virtio/virtio.c
++++ b/hw/virtio/virtio.c
+@@ -3119,7 +3119,13 @@ int virtio_load(VirtIODevice *vdev, QEMUFile *f, int version_id)
+              * to calculate used and avail ring addresses based on the desc
+              * address.
+              */
+-            if (virtio_vdev_has_feature(vdev, VIRTIO_F_VERSION_1)) {
++            /*
++             * The ring addresses are migrated whenever the host offers
++             * VERSION_1 (see virtio_virtqueue_needed), so use them even if
++             * the guest never acknowledged the feature bit.
++             */
++            if (virtio_host_has_feature(vdev, VIRTIO_F_VERSION_1)) {
+                 virtio_init_region_cache(vdev, i);
+             } else {
+                 virtio_queue_update_rings(vdev, i);

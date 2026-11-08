@@ -207,6 +207,14 @@ if [ ! -f "$WORK/navigon-disk.img" ]; then
   python3 -I "$HERE/mkdisk.py" "$WORK/navigon-disk.img.part" "$DISK_MB" "$NAV"/stage/* | tail -2
   mv "$WORK/navigon-disk.img.part" "$WORK/navigon-disk.img"
 fi
+# qcow2 overlay on top of the raw disk: the guest's writes and VM snapshots
+# (start-vw.sh --save) go there, the raw image stays as built. Recreated
+# whenever the raw image is newer.
+if command -v qemu-img >/dev/null && { [ ! -f "$WORK/navigon-disk.qcow2" ] || [ "$WORK/navigon-disk.img" -nt "$WORK/navigon-disk.qcow2" ]; }; then
+  rm -f "$WORK/navigon-disk.qcow2"
+  qemu-img create -q -f qcow2 -b "$WORK/navigon-disk.img" -F raw "$WORK/navigon-disk.qcow2"
+  echo "overlay: $WORK/navigon-disk.qcow2"
+fi
 
 echo "done. Boot with: $HERE/run-emulator.sh --navigon"
 

@@ -10,6 +10,7 @@ Everything needed to compile, deploy and run C/C++ programs for the device
 | `Makefile` | Builds the samples and the agent into `bin/` with the right flags |
 | `samples/hello/` | `hello.c` (plain Win32 CE) and `hellocpp.cpp` (libstdc++, exceptions) |
 | `agent/ceagent.c` | In-guest deploy agent: file transfer, directory listing and process start over a serial port or TCP |
+| `drivers/pl011poll/` | `pl011poll.dll`, a polled PL011 UART stream driver (kernel mode, loaded at run time), and `addport.exe`, which registers it as `COM2:`/`COM3:` in the emulator so GPS, the agent and a third channel each get a port |
 | `deploy.py` | Host side of the agent: `put`, `get`, `ls`, `rm`, `mkdir`, `run`, `push --run` |
 
 ## Toolchain
@@ -62,28 +63,36 @@ CEGCC=/opt/cegcc-arm make     # with a native toolchain
 
 ## Deploy and run
 
-In the emulator: `build-navigon.sh` copies `Devkit/bin/*.exe` to
-`\My Flash Disk\dev` and the `0emu` folder has a `0 agent COM1` shortcut as
-its first icon. Double-click it once per boot (or with `tools/vnc.py`), then
-everything is remote:
+In the emulator: `build-navigon.sh` copies `Devkit/bin/*` to
+`\My Flash Disk\dev`, and `launch-all.exe` runs `addport.exe` (adds `COM2:`
+and `COM3:`) and the agent on `COM2:` before the VW apps. So:
 
 ```sh
-Emulator/run-emulator.sh --navigon --headless &
-sleep 85; Emulator/tools/vnc.py 0emu dbl 38 75 3  # start "0 agent COM1"
-python3 Devkit/deploy.py ping                     # -> ceagent 1
+Emulator/start-vw.sh --gps                        # boot + launch-all + GPS feed
+python3 Devkit/deploy.py ping                     # -> ceagent 1  (COM2: = port 5556)
 python3 Devkit/deploy.py push bin/hello.exe "\My Flash Disk\dev2" --run --wait 10
 python3 Devkit/deploy.py get "\My Flash Disk\dev2\hello.txt" hello.txt
 grep -a -o "EMUHELLO[^P]*" Emulator/work/serial.log
 ```
 
+Without `launch-all`, the `0 agent COM1` shortcut (first icon in `0emu`)
+runs the agent on `COM1:` instead (`deploy.py --port 5555`). The kernel
+log shows `ADDPORT: COM2: at 910b0000 -> ok` and `CEAGENT: starting on
+COM2:` when the ports came up.
+
 Verified here: `hello.exe` reports "Windows CE 7.0, cpu type 3087, 115 MB
 RAM" and writes its file; `hellocpp.exe` sorts, throws and catches, and its
 static destructor runs; a 74 KB push takes 1.6 s over the emulated UART.
 
-The agent uses `COM1:`, which run-emulator.sh exposes on `127.0.0.1:5555`.
-That is the same UART the GPS feeder (`tools/nmea.py`) uses, so pick one per
-session until the image gets a second serial port (the vexpress board has
-four, the Compact 7 image registers one `pl011`).
+How the extra ports work: the image's own `pl011.dll` reads a kernel
+virtual address (`IoBase`, 0x910a0000 for UART1) and an interrupt from the
+registry. `addport.exe` creates `HKLM\Drivers\BuiltIn\PL011POLLn` keys
+with `IoBase` + n*0x10000, copies `pl011poll.dll` into `\Windows` (device
+manager loads kernel-mode drivers by name from there) and calls
+`ActivateDeviceEx`. The driver polls the receive FIFO from a thread, so no
+interrupt mapping is needed; it implements the serial IOCTLs that
+`SetCommState`, `SetCommTimeouts`, `WaitCommEvent` and friends use. The
+registry is not persisted in this image, hence once per boot.
 
 On the device: copy the files over USB mass storage, start them from
 `autorunce.mscr` or a `.lnk`, and run the agent on the debug UART with a
