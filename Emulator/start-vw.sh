@@ -15,6 +15,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORK="${WORK:-$HERE/work}"
 PY="${PYTHON:-python3}"
+export OUT="$WORK/shots"; mkdir -p "$OUT"     # where tools/vnc.py puts screenshots
 save="" resume="" gps=0
 while [ $# -gt 0 ]; do
   case "$1" in
