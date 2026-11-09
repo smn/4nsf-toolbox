@@ -23,6 +23,10 @@ Everything runs on a stock `qemu-system-arm`; one optional convenience, restorin
 
 The folder also documents what was needed to get there (hidden-flash pairing, loader and timer quirks, the software map renderer) and ships the tooling used: a mouse-driven VNC controller, an NMEA GPS feeder, a Windows CE API tracer on QEMU's gdbstub, PE patching and stub-DLL generators, and small in-guest test programs. See [Emulator/README.md](Emulator/README.md) for the details and the current limits (no vehicle data, Bluetooth or GL ES yet).
 
+## Hardware notes
+
+[docs/hardware.md](docs/hardware.md) collects what the firmware reveals about the device: Cartesio+ SoC, CSR BlueCore 5 Bluetooth (classic only), a Mentor MUSB OTG USB controller that the boot loader already drives in host mode, the unsigned boot chain with its SD-card recovery and live-boot modes, and the hidden-flash layout.
+
 ## Apps
 
 Additional apps add new features to the device. The following apps are available in the repository.
